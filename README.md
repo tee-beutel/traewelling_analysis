@@ -10,14 +10,14 @@ Um es dir so einfach wie möglich zu machen, gibt es automatisierte Start-Dateie
 
 ### Windows
 
-Doppelklicke auf die Datei `run_analysis.bat`.
+Doppelklicke auf die Datei `run_analysis_win.bat`.
 
-### Linux / macOS
+### macOS
 
 Öffne das Terminal im Ordner und gib ein:
 
 ```bash
-chmod +x run_analysis.sh
+chmod +x run_analysis_mac.sh
 ./run_analysis.sh
 
 ```
