@@ -1,0 +1,60 @@
+📝 Changelog: traewelling_analysis v5 ➔ v6.0
+🚀 Neue Hauptfeatures
+
+    Excel-Export (.xlsx): Einführung der create_excel() Funktion. Erzeugt umfangreiche Arbeitsmappen mit mehreren Sheets:
+
+        Fahrtenliste: Alle Details inkl. Hyperlinks direkt zum Träwelling-Status.
+
+        Statistiken: Zusammenfassung der Metriken (Gesamt, pro Tag, pro Fahrt).
+
+        Kategorien/Betreiber/Linien: Detaillierte Analyse inkl. Durchschnittsgeschwindigkeit, Pünktlichkeitsquote und gesammelter Punkte.
+
+        Haltestellen & Fahrzeuge: Ranking der meistbesuchten Orte und genutzten Fahrzeuge.
+
+    Gemeinsame Fahrten: Die neue Funktion shared_trips_analysis identifiziert Fahrten, die von mehreren Usern im Datensatz gleichzeitig unternommen wurden.
+
+    Automatisches Dependency-Management: Das Skript prüft nun beim Start aktiv auf fehlende Module (timezonefinder, tzdata) und installiert diese bei Bedarf selbstständig via pip.
+
+📈 Erweiterte Analysen & Metriken
+
+    Zeit- & Geschwindigkeitsanalyse: v6.0 berechnet nun nicht mehr nur Distanzen, sondern auch die reale Reisezeit und die daraus resultierende Durchschnittsgeschwindigkeit pro Betreiber oder Zugtyp.
+
+    Punktesystem: Integration der Träwelling-Punkte in alle Auswertungen und Exporte.
+
+    Präzisere Verspätungsregeln: Der Schwellenwert für "Verspätung" (Default: 300s/5min) kann nun beim Initialisieren der Traewelling-Klasse global angepasst werden.
+
+    Erweiterte Zugtyp-Logik: Die Erkennung von Regionalzügen wurde verfeinert (z.B. Ausschluss von Bussen bei RE/RB-Liniennamen).
+
+🛠 Technische Verbesserungen & Refactoring
+
+    ID-basierte Nutzerverwaltung: Intern wird nun die eindeutige user_id statt des Usernamens als Primärschlüssel verwendet. Dies verhindert Fehler bei Namensänderungen oder Namensgleichheit.
+
+    Performance-Optimierung:
+
+        TimezoneFinder wird nun im in_memory-Modus geladen, was die Verarbeitung großer Datensätze beschleunigt.
+
+        Einführung eines Timers am Ende des Skripts zur Messung der Verarbeitungsdauer.
+
+    Robustere Datenverarbeitung:
+
+        pandas Integration für professionelles Datenhandling in den Exporten.
+
+        Verbesserte Zeitberechnungen mittels divmod für saubere Formatierung von Stunden und Minuten (hh:mm).
+
+        GIS-Exporte (create_gis_number_csv) wurden korrigiert und unterstützen nun User-Filter.
+
+    Properties: Die User- und Journey-Klassen nutzen nun konsequent @property-Dekoratoren für einen sauberen Datenzugriff.
+
+🐞 Bugfixes
+
+    Behebung von Fehlern bei der Berechnung der journey_time, wenn Ankunftszeiten vor Abfahrtszeiten lagen (z.B. durch Zeitzonen-Fehler in Rohdaten).
+
+    Formatierung der CSV-Exporte korrigiert (Encoding utf-8-sig für bessere Kompatibilität mit Excel).
+
+📋 Neue Abhängigkeiten
+
+Um die neuen Funktionen nutzen zu können, werden zusätzlich benötigt:
+
+    pandas
+
+    openpyxl (für den Excel-Export)

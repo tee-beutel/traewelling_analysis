@@ -1,6 +1,6 @@
 # Traewelling Analysis v6.0 🚄📊
 
-Willkommen beim ultimativen Tool für Statistik-Liebhaber und Bahn-Nerds! Dieses Skript analysiert deine **Träwelling-Exporte** (JSON-Dateien) und verwandelt sie in detaillierte Excel-Tabellen, CSV-Statistiken und eine Übersicht deiner meistbefahrenen Strecken und genutzten Fahrzeuge.
+Willkommen beim ultimativen Tool für Statistik-Liebhaber und Bahn-Nerds! Dieses Skript analysiert deine **Träwelling-Exporte** (JSON-Dateien) und verwandelt sie in detaillierte Excel-Tabellen, CSV-Statistiken und eine Übersicht deiner meistbefahrenen Strecken und genutzten Fahrzeuge. Damit du sofort startklar bist habe ich dir auch meine .json's zur Verfügung gestellt.
 
 ---
 
