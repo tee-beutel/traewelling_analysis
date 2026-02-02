@@ -1,31 +1,5 @@
 
-#traewelling_analysis_v6.0.py
-
-import subprocess
-import sys
-
-# 1. Check/Install timezonefinder --Achtung KI-generiert--
-try:
-    import timezonefinder
-except ImportError:
-    print("Modul 'timezonefinder' nicht gefunden. Installation wird gestartet...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "timezonefinder"])
-    print("timezonefinder erfolgreich installiert.")
-
-# 2. Check/Install tzdata für zoneinfo
-try:
-    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-    try:
-        # Teste, ob eine Standard-Zeitzone geladen werden kann
-        ZoneInfo("Europe/Berlin")
-    except ZoneInfoNotFoundError:
-        print("Zeitzonendaten fehlen (tzdata). Installation wird gestartet...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "tzdata"])
-        print("tzdata erfolgreich installiert.")
-except ImportError:
-    # Falls Python < 3.9 verwendet wird, existiert zoneinfo noch nicht
-    print("Fehler: 'zoneinfo' ist erst ab Python 3.9 verfügbar. Bitte Python aktualisieren.")
-    sys.exit(1)
+#traewelling_analysis_v6.1.py
 
 import json
 from pathlib import Path
@@ -36,6 +10,7 @@ import csv
 import pandas as pd
 from datetime import datetime
 import re
+from collections import Counter
 
 
 
@@ -50,19 +25,23 @@ class Journey:
         self.__user_name = data['status']['userDetails'].get('username', 'Username not found')
         self.__user_id = data['status']['userDetails'].get('id', 'N/A')
 
-        self.__origin_stop = (f'{data['status']['train']['origin']['name']} ({data['status']['train']['origin']['rilIdentifier']})' if
-                              data['status']['train']['origin'].get('rilIdentifier') else data['status']['train']['origin']['name'])
-        self.__destination_stop = (f'{data['status']['train']['destination']['name']} ({data['status']['train']['destination']['rilIdentifier']})' if
-                              data['status']['train']['destination'].get('rilIdentifier') else data['status']['train']['destination']['name'])
+        o, d = data['status']['train']['origin'], data['status']['train']['destination']
+        self.__origin_stop = (f'{o['name']} ({o['rilIdentifier']})' if o.get('rilIdentifier') else (o['name']
+                                if o['name'] != 'Braunschweig Hbf ZOB' else 'Braunschweig Hbf (HBS)'))
+        self.__destination_stop = (f'{d['name']} ({d['rilIdentifier']})' if d.get('rilIdentifier') else (d['name']
+                                if d['name'] != 'Braunschweig Hbf ZOB' else 'Braunschweig Hbf (HBS)'))
+
         self.__origin_coordinates =(data['trip']['origin'].get('latitude', 'N/A'), data['trip']['origin'].get('longitude', 'N/A'))
         self.__destination_coordinates = (data['trip']['destination'].get('latitude', 'N/A'), data['trip']['destination'].get('longitude', 'N/A'))
 
         self.__via_stations_data = data['trip'].get('stopovers', [])
-        self.__via_stations = list(f'{d['name']} ({d['rilIdentifier']})' if d.get('rilIdentifier') else d['name']
+        self.__via_stations = list(f'{d['name']} ({d['rilIdentifier']})' if d.get('rilIdentifier') else (d['name'] if d['name'] != 'Braunschweig Hbf ZOB' else 'Braunschweig Hbf (HBS)')
                                    for d in self.__via_stations_data)
         number_origin = self.__via_stations.index(self.__origin_stop)
         number_destination = self.__via_stations.index(self.__destination_stop)
         self.__via_stations = self.__via_stations[number_origin+1:number_destination]
+
+
 
 
         self.__timezone_origin = timezone_info.get(self.__origin_stop, None)
@@ -129,14 +108,26 @@ class Journey:
         self.__departure_delay = (self.__real_departure - self.__planned_departure).total_seconds()
         self.__arrival_delay = (self.__real_arrival - self.__planned_arrival).total_seconds()
 
-
+        self.__journey_points = data['status']['train']['points']
+        self.__journey_number = data['status']['train']['journeyNumber']
 
         self.__vehicle_number = 'N/A'
+        self.__ticket_used = 'N/A'
+        self.__wagon_class = 'N/A'
+        self.__locomotive_class = 'N/A'
         self.__tags = data['status'].get('tags', None)
         if self.__tags is not None:
             for tag in self.__tags:
                 if tag.get('key', None) == 'trwl:vehicle_number':
                     self.__vehicle_number = tag.get('value', 'N/A')
+                if tag.get('key', None) == 'trwl:journey_number':
+                    self.__journey_number = tag.get('value', 'N/A')
+                if tag.get('key', None) == 'trwl:locomotive_class':
+                    self.__locomotive_class = tag.get('value', 'N/A')
+                if tag.get('key', None) == 'trwl:ticket':
+                    self.__ticket_used = tag.get('value', 'N/A')
+                if tag.get('key', None) == 'trwl:wagon_class':
+                    self.__wagon_class = tag.get('value', 'N/A')
 
         self.__journey_time_planned = (self.__planned_arrival - self.__planned_departure).total_seconds()
         self.__journey_time_real = (self.__real_arrival - self.__real_departure).total_seconds()
@@ -288,12 +279,8 @@ class User:
         return self.__name
 
     def __eq__(self, other)->bool:
-        if isinstance(other,Journey):
-            return self.__name == other.user_name
-        elif isinstance(other,User):
+        if isinstance(other,User):
             return self.__id == other.__id
-        elif isinstance(other, str):
-            return self.__name == other
         else:
             print(f'Kein Vergleich von {self.__name} mit {type(other).__name__} möglich')
             return False
@@ -353,7 +340,8 @@ class User:
                                          'realtime_availability': journey_realtime_availability + distance_type.get(train_type, {}).get('realtime_availability', 0),
                                          'sum': 1 + distance_type.get(train_type, {}).get('sum', 0),
                                          'delayed_by_standard': journey_delayed_by_standard + distance_type.get(train_type, {}).get('delayed_by_standard', 0),
-                                         'points': journey_points + distance_type.get(train_type, {}).get('points', 0)}
+                                         'points': journey_points + distance_type.get(train_type, {}).get('points', 0),
+                                         'all_delay_arr': distance_type.get(train_type, {}).get('all_delay_arr', []) + [journey_arrival_delay]}
 
             distance_operator_line[line_tuple] = {'distance': journey_distance + distance_operator_line.get(line_tuple, {}).get('distance', 0),
                                                   'time': journey_time + distance_operator_line.get(line_tuple, {}).get('time', 0),
@@ -361,7 +349,8 @@ class User:
                                                   'realtime_availability': journey_realtime_availability + distance_operator_line.get(line_tuple, {}).get('realtime_availability', 0),
                                                   'sum': 1 + distance_operator_line.get(line_tuple, {}).get('sum', 0),
                                                   'delayed_by_standard': journey_delayed_by_standard + distance_operator_line.get(line_tuple, {}).get('delayed_by_standard', 0),
-                                                  'points': journey_points + distance_operator_line.get(line_tuple, {}).get('points', 0)}
+                                                  'points': journey_points + distance_operator_line.get(line_tuple, {}).get('points', 0),
+                                                  'all_delay_arr': distance_operator_line.get(train_type, {}).get('all_delay_arr', []) + [journey_arrival_delay]}
 
             distance_operator[operator_name] = {'distance': journey_distance + distance_operator.get(operator_name, {}).get('distance', 0),
                                                 'time': journey_time + distance_operator.get(operator_name, {}).get('time', 0),
@@ -369,7 +358,8 @@ class User:
                                                 'realtime_availability': journey_realtime_availability + distance_operator.get(operator_name, {}).get('realtime_availability', 0),
                                                 'sum': 1 + distance_operator.get(operator_name, {}).get('sum', 0),
                                                 'delayed_by_standard': journey_delayed_by_standard + distance_operator.get(operator_name, {}).get('delayed_by_standard', 0),
-                                                'points': journey_points + distance_operator.get(operator_name, {}).get('points', 0)}
+                                                'points': journey_points + distance_operator.get(operator_name, {}).get('points', 0),
+                                                'all_delay_arr': distance_operator.get(train_type, {}).get('all_delay_arr', []) + [journey_arrival_delay]}
 
 
 
@@ -378,40 +368,6 @@ class User:
         self.__distance_operator_line_sorted = dict(sorted(distance_operator_line.items(), key=lambda x: x[1].get('distance', 0), reverse=True))
         self.__distance_operator_sorted = dict(sorted(distance_operator.items(), key=lambda x: x[1].get('distance', 0), reverse=True))
 
-    def __user_distance_analysis_output(self):
-        print(f'Distanzanalyse für {self.__name}:\n')
-        print(f'Gesamtdistanz in {self.__exported_days} Tagen: {self.__total_distance / 1000:.2f} Kilometer')
-        print(f'Durchschnittlich {(self.__total_distance / self.__exported_days) / 1000:.2f} Kilometer pro Tag gemacht.', '\n')
-
-        print('Anteile der Verschiedenen Verkehrsmittel am Mix (Distanz/Zeit):')
-        for train_type, distance_time_per_type in self.__distance_type_sorted.items():
-            print(f'{train_type:.<16}: {distance_time_per_type.get('distance') / self.__total_distance * 100:<5.2f}% '
-                  f'insgesamt {distance_time_per_type.get('distance') / 1000:<10.2f}km und {distance_time_per_type.get('time') / self.__total_journey_time * 100:<5.2f}% also'
-                  f' {distance_time_per_type.get('time')/60:>7.0f} Minuten')
-        print(f'\n{50 * "-"}\n')
-
-        current_place = 0
-        print(f'Das sind die {len(self.__distance_operator_line_sorted)} Linen von {self.__name}:')
-        for (operator_name, line_name), line_distance in self.__distance_operator_line_sorted.items():
-            current_place += 1
-            print(
-                f'{current_place:>3}. Linie {line_name:.<18} von {operator_name:.<60} {line_distance.get('distance',0) / 1000:<7.2f} '
-                f'Kilometer und {line_distance.get('time',0) / 60:>7.0f} Minuten')
-        print(f'\n{50 * "-"}\n')
-
-        current_place = 0
-        print(f'Das sind die {len(self.__distance_operator_sorted)} Betreiber von {self.__name}:')
-        for operator_name, operator_data in self.__distance_operator_sorted.items():
-            current_place += 1
-            print(
-                f'{current_place:>3}. Betreiber {operator_name:.<60}hat {operator_data.get('distance',0) / 1000:<9.2f} Kilometer, das sind '
-                f'{operator_data.get('distance',0) / self.__total_distance * 100:>5.2f}% und und {operator_data.get('time',0) / 60:>7.0f} Minuten'
-                f'{((operator_data.get('distance',0) / 1000) / (operator_data.get('time',0) / 3600) if operator_data.get('time',0) else 0):>7.2f}km/h')
-        print(f'\n{50 * "-"}\n')
-
-    def distance_analysis_per_user(self):
-        self.user_distance_time_analysis_execute()
-        self.__user_distance_analysis_output()
 
     def delay_analysis_execute(self) -> None:
         self.__cumulative_delay = sum(j.arrival_delay for j in self.__journeys if j.arrival_delay > 0)
@@ -459,25 +415,7 @@ class User:
         self.__type_delay_sorted = dict(sorted(type_delay_dict.items(), key=lambda x: sum(d for d in x[1] if d > 0), reverse=True))
         self.__type_number_sorted = dict(sorted(type_number_dict.items(), key=lambda x: x[1], reverse=True))
 
-    def __delay_analysis_output(self) -> None:
-        print(f'\nVerspätungsstatistik für {self.__name}')
-        print(f'Für {self.__realtime_availability * 100:.2f}% deiner Fahrten gibt es Echtzeitdaten')
-        print(f'{self.__delay_rate_standard*100 :.2f}% aller Fahren sind mehr als fünf Minuten zu spät')
-        print(f'Durchschnittliche Verspätung {self.__average_delay:.2f} Sekunden.')
-        print(f'Insgesamt in {self.__exported_days} Tagen: {self.__cumulative_delay/3600:.3f} Stunden.')
-        print(f'Am meisten verspätet war die {self.__max_delay_journey}')
-        print(f'Am meisten verfrüht war die {self.__max_ahead_journey}')
-        print('\nVerspätung nach Zugtyp')
-        for train_type in self.__type_delay_sorted.keys():
-            print(
-                f'{train_type:.<16}insgesamt {sum(d for d in self.__type_delay_sorted[train_type] if d > 0) / 60:<5.0f} Minuten '
-                f'{self.__type_delay_by_standard_dict.get(train_type,0) / self.__type_number_sorted[train_type]*100:<5.2f}% mehr als 5 Minuten '
-                f'(bei {self.__type_number_sorted[train_type]:<4} Fahrten)')
-        print(f'\n{50 * "-"}\n')
 
-    def delay_analysis(self) -> None:
-        self.delay_analysis_execute()
-        self.__delay_analysis_output()
 
     def visited_station_execution(self):
         for j in self.__journeys:
@@ -486,21 +424,9 @@ class User:
         self.__number_of_visited_stations = len(self.__visited_stations)
         self.__visited_stations = dict(sorted(self.__visited_stations.items(), key=lambda x: x[1], reverse=True))
 
-    def __visited_station_output(self) -> None:
-        print(f'\n{self.__name} war an folgenden {self.__number_of_visited_stations} Haltestellen:')
-        current_place, place_previous = 0, 0
-        visited_previous = list(self.__visited_stations.values())[0] + 1
-
-        for stop, times_visited in self.__visited_stations.items():
-            current_place += 1
-            if times_visited != visited_previous:
-                place_previous = current_place
-            visited_previous = times_visited
-            print(f"{place_previous:>3}. {stop:.<55} wurde {times_visited:>3}-mal besucht")
-        print(f'\n{50 * "-"}\n')
 
     def __visited_station_with_via_execution(self) -> None:
-        self.__stations_with_via = self.visited_stations
+        self.__stations_with_via = self.visited_stations.copy()
         for j in self.__journeys:
             for name in j.via_stations:
                 self.__stations_with_via[name] = self.__stations_with_via.get(name, 0) + 1
@@ -508,18 +434,6 @@ class User:
         self.__stations_with_via = dict(sorted(self.__stations_with_via.items(), key=lambda x: x[0], reverse=False))
         self.__stations_with_via = dict(sorted(self.__stations_with_via.items(), key=lambda x: x[1], reverse=True))
 
-    def __visited_station_with_via_output(self) -> None:
-        print(f'\n{self.__name} war an folgenden {self.__number_of_visited_stations_with_via} Haltestellen (Zwichenhaltestellen inkusive):')
-        current_place, place_previous = 0, 0
-        visited_previous = list(self.__stations_with_via.values())[0] + 1
-
-        for stop, times_visited in self.__stations_with_via.items():
-            current_place += 1
-            if times_visited != visited_previous:
-                place_previous = current_place
-            visited_previous = times_visited
-            print(f"{place_previous:>3}. {stop:.<55} wurde {times_visited:>3}-mal besucht")
-        print(f'\n{50 * "-"}\n')
 
     def vehicle_execution(self):
         for j in self.__journeys:
@@ -527,128 +441,7 @@ class User:
             self.__used_vehicles[vehicle_ident] = self.__used_vehicles.get(vehicle_ident, 0) + 1
         self.__used_vehicles = dict(sorted(self.__used_vehicles.items(), key=lambda x: x[1], reverse=True))
 
-    def __vehicle_output(self) -> None:
-        print(f'\n{self.__name} hat folgende {len(self.__used_vehicles)} Fahrzeuge genutzt:')
-        current_place, place_previous = 0, 0
-        used_previous = list(self.__used_vehicles.values())[0] + 1
-        for (vehicle, operator), number_used in self.__used_vehicles.items():
-            current_place += 1
-            if number_used != used_previous:
-                place_previous = current_place
-            used_previous = number_used
-            if vehicle == 'N/A':
-                print(f'{place_previous:>3}.{number_used:>3} Fahrten haben keine Fahrzeugnummer')
-            else:
-                print(f'{place_previous:>3}.Fahrzeug {vehicle:.<30}. {number_used:>3}-mal genutzt')
-        print(f'\n{50 * "-"}\n')
 
-    def visited_station(self):
-        self.visited_station_execution()
-        self.__visited_station_output()
-
-    def visited_station_with_via(self):
-        self.__visited_station_with_via_execution()
-        self.__visited_station_with_via_output()
-
-    def vehicle_analysis(self) -> None:
-        self.vehicle_execution()
-        self.__vehicle_output()
-
-    def create_journeys_csv(self) -> None:
-        header_row = ['Kategorie','Linie','Fahrtnummer','Betreiber','Abfahrtshaltestelle','Abfahrt geplant','Abfahrt real','Abw ab',
-                      'Zielstation','Ankunft geplant','Ankunft real','Abw an','Reisezeit (min)','Reisezeit (hh:mm)',
-                      'Delta','Entfernung (m)', 'Entfernung (km)', 'Punkte']
-        journey_rows: list[list] = []
-        for j in self.__journeys:
-            j_row = [j.train_type, j.line_name, j.journey_number, j.operator_name, j.origin_stop, j.departure_planned.strftime('%d.%m.%Y %H:%M')]
-            if j.realtime_availability:
-                j_row.append(j.departure_real.strftime('%d.%m.%Y %H:%M'))
-            else:
-                j_row.append('N/A')
-            j_row.extend([int(round(j.departure_delay/60,0)), j.destination_stop, j.arrival_planned.strftime('%d.%m.%Y %H:%M')])
-            if j.realtime_availability:
-                j_row.append(j.arrival_real.strftime('%d.%m.%Y %H:%M'))
-            else:
-                j_row.append('N/A')
-            #journey_hours = int(j.journey_time_real/3600)
-            #journey_minutes = int((j.journey_time_real-journey_hours*3600)/60)
-            journey_hours, journey_minutes = divmod(max(j.journey_time_real/60,0), 60)
-            j_row.extend([int(round(j.arrival_delay/60,0)),int(round(j.journey_time_real/60,0)),f"{int(journey_hours):02}:{int(journey_minutes):02}",
-                          int(round(j.journey_time_delta/60,0)), j.journey_distance,
-                          f'{j.journey_distance/1000:.3f} km', j.journey_points, j.realtime_availability])
-            journey_rows.append(j_row)
-
-        #time_per_day = self.__total_journey_time/self.__exported_days
-        #total_hours = int(self.__total_journey_time/3600)
-        #total_minutes = int(((self.__total_journey_time-total_hours*3600)/60))
-        total_hours, total_minutes = divmod(self.__total_journey_time/60, 60)
-
-
-        total_row = ['Gesamtwert:', f'{len(self.distance_operator_line_sorted)} verschiedene Linien',
-                     f'{len(self.__journeys)} Fahrten',
-                     f'{len(self.distance_operator_sorted)} verschidene Betreiber',
-                     f'{self.number_of_visited_stations} einmalige Haltestellen',
-                     f'{self.__exported_days} Tage exportiert',
-                     '',
-                     f'{sum(j.departure_delay for j in self.__journeys) / 60:.0f} Minuten',
-                     '', '', '',
-                     f'{sum(j.arrival_delay for j in self.__journeys) / 60:.0f} Minuten',
-                     f'{int(self.__total_journey_time / 60)} Minuten',
-                     f"{total_hours:02.0f}:{int(round(total_minutes, 0)):02}",
-                     f'{sum(j.journey_time_delta / 60 for j in self.__journeys):.0f} Minuten',
-                     f'{self.__total_distance} Meter', f'{self.__total_distance / 1000:.2f} Kilometer',
-                     f'{sum(j.journey_points for j in self.__journeys)} Punkte']
-
-        #per_day_hours = int(time_per_day / 3600)
-        #per_day_minutes = int(((time_per_day - per_day_hours * 3600) / 60))
-        per_day_hours, per_day_minutes = divmod((self.__total_journey_time/self.__exported_days)/60, 60)
-
-        average_per_day_row = ['Durchschnitt pro Tag:',
-                               f'{len(self.distance_operator_line_sorted) / self.__exported_days:.3f} verschiedene Linien',
-                               f'{len(self.__journeys) / self.__exported_days:.3f} Fahrten',
-                               f'{len(self.distance_operator_sorted) / self.__exported_days:.3f} verschidene Betreiber',
-                               f'{self.number_of_visited_stations / self.__exported_days:.3f} einmalige Haltestellen',
-                               '', '',
-                               f'{(sum(j.departure_delay for j in self.__journeys) / 60) / self.__exported_days :.3f} Minuten',
-                               '', '', '',
-                               f'{(sum(j.arrival_delay for j in self.__journeys) / 60) / self.__exported_days :.3f} Minuten',
-                               f'{self.__total_journey_time / 60 / self.__exported_days :.3f} Minuten',
-                               f"{per_day_hours:02.0f}:{round(per_day_minutes, 0):02.0f}",
-                               f'{sum(j.journey_time_delta / 60 for j in self.__journeys) / self.__exported_days:.3f} Minuten',
-                               f'{self.__total_distance / self.__exported_days :.3f} Meter',
-                               f'{self.__total_distance / 1000 / self.__exported_days:.2f} Kilometer',
-                               f'{sum(j.journey_points for j in self.__journeys) / self.__exported_days :.3f} Punkte']
-
-        #time_per_journey = self.__total_journey_time / self.__number_of_journeys
-        #per_journey_hours = int(time_per_journey / 3600)
-        #per_journey_minutes = int(((time_per_journey - per_journey_hours * 3600) / 60))
-        per_journey_hours, per_journey_minutes = divmod((self.__total_journey_time / self.__number_of_journeys)/60, 60)
-        average_per_journey_row = ['Durchschnitt pro Fahrt:',
-                               f'{len(self.distance_operator_line_sorted) / self.__number_of_journeys:.3f} verschiedene Linien',
-                               f'{len(self.__journeys) / self.__number_of_journeys:.3f} Fahrten',
-                               f'{len(self.distance_operator_sorted) / self.__number_of_journeys:.3f} verschidene Betreiber',
-                               f'{self.number_of_visited_stations / self.__number_of_journeys:.3f} einmalige Haltestellen',
-                               '', '',
-                               f'{(sum(j.departure_delay for j in self.__journeys) / 60) / self.__number_of_journeys :.3f} Minuten',
-                               '', '', '',
-                               f'{(sum(j.arrival_delay for j in self.__journeys) / 60) / self.__number_of_journeys :.3f} Minuten',
-                               f'{self.__total_journey_time / self.__number_of_journeys / 60:.3f} Minuten',
-                               f"{per_journey_hours:02.0f}:{round(per_journey_minutes, 0):02.0f}",
-                               f'{sum(j.journey_time_delta / 60 for j in self.__journeys) / self.__number_of_journeys:.3f} Minuten',
-                               f'{self.__total_distance / self.__number_of_journeys :.3f} Meter',
-                               f'{self.__total_distance / 1000 / self.__number_of_journeys:.2f} Kilometer',
-                               f'{sum(j.journey_points for j in self.__journeys) / self.__number_of_journeys :.3f} Punkte']
-
-        journey_rows.extend([[], total_row, average_per_day_row,average_per_journey_row])
-
-
-
-        with open(f"{self.__name}'s_journeys.csv", 'w', newline='', encoding='utf-8-sig') as datei:
-            schreiben = csv.writer(datei, delimiter=';')
-            schreiben.writerow(header_row)
-            schreiben.writerows(journey_rows)
-        print(f'Created {datei.name}')
-        print(f'\n{50 * "-"}\n')
 
 
     def create_excel(self) -> None:
@@ -718,7 +511,11 @@ class User:
                                             f'{self.__total_distance / 1000 / self.__number_of_journeys:.2f} Kilometer'],
                       'Punkte':[f'{sum(j.journey_points for j in self.__journeys)} Punkte',
                                 f'{sum(j.journey_points for j in self.__journeys) / self.__exported_days :.3f} Punkte',
-                                f'{sum(j.journey_points for j in self.__journeys) / self.__number_of_journeys :.3f} Punkte']}
+                                f'{sum(j.journey_points for j in self.__journeys) / self.__number_of_journeys :.3f} Punkte'],
+                      'Echtzeitquote': [f'{self.realtime_avaliability * 100:.2f}%',f'',f''],
+                      f'Mehr als {round(self.__delay_standard/60)} Minuten verspätet': [f'{self.delay_rate_standard*100 :.2f}%',
+                                        f'',
+                                        f'']}
 
         stats_dataframe = pd.DataFrame(stats_data)
 
@@ -808,8 +605,10 @@ class User:
                 place_previous = current_place
             visited_previous = times_visited
             stop_with_via_data.append({'Platz': place_previous,
-                              f'Haltestelle ({self.__number_of_visited_stations_with_via})': stop,
-                              'Besuche': times_visited})
+                                        f'Haltestelle ({self.__number_of_visited_stations_with_via})': stop,
+                                        'Anzahl ohne Via': self.visited_stations.get(stop,0),
+                                        'Anzahl mit Via': times_visited,
+                                        'Umstiegquote (%)': round(self.visited_stations.get(stop,0)/times_visited * 100, 2)})
 
         stop_with_via_dataframe = pd.DataFrame(stop_with_via_data)
 
@@ -912,6 +711,16 @@ class User:
         if not self.__stations_with_via:
             self.__visited_station_with_via_execution()
         return self.__stations_with_via
+    @property
+    def realtime_avaliability(self) -> float:
+        if not self.__realtime_availability:
+            self.delay_analysis_execute()
+        return self.__realtime_availability
+    @property
+    def delay_rate_standard(self) -> float:
+        if not self.__delay_rate_standard:
+            self.delay_analysis_execute()
+        return self.__delay_rate_standard
 
 
 
@@ -988,180 +797,6 @@ class Traewelling:
         for user in self.__user_id_dict.items():
             user[1].get_import_length()
 
-    def __str__(self)->str:
-        print_string = ''
-        for journey in self.__journeys:
-            print_string += f'{journey}\n'
-        return print_string
-
-    def user_journey_list(self) -> str:
-        print_string = ''
-        for user in self.__user_name_dict.items():
-            print_string += f'{user[1]}\n'
-        return print_string
-
-    def distance_analysis(self, user_name_list: str | list[str] | None= None) -> None:
-        user_list = self.__user_input_to_object(user_name_list, 1)
-        if user_list is None:
-            return
-        for user in user_list:
-            user.distance_analysis_per_user()
-
-    def distance_type_comparison_absolut(self, user_name_list: str | list[str] | None= None) -> None:
-        user_list = self.__user_input_to_object(user_name_list, 2)
-        if user_list is None:
-            print('\nAbsoluter Vergleich der Distanzen benötigt mindestens zwei User')
-            return
-        type_set: set[str] = set()
-        for user in user_list:
-            if user.distance_type_sorted is None:
-                user.user_distance_analysis_execute()
-            for train_type , train_distance in user.distance_type_sorted.items():
-                type_set.add(train_type)
-        type_list = sorted(type_set)
-        names = f'{user_list[0].name}, ' + ', '.join([user.name for user in user_list[1:]])
-        print(f'\nAbsoluter Vergleich der Distanzen von {names} für Verkehrsmittel:')
-        for type in type_list:
-            user_type_distance : dict[str,int] = dict()
-            for user in user_list:
-                user_type_distance[user.name] = user.distance_type_sorted.get(type,{}).get('distance', 0)
-            user_type_distance_sorted = sorted(user_type_distance.items(), key=lambda x: (x[1]), reverse=True)
-            current_place = 0
-            print(f'\n{type}:')
-            for user, distance in user_type_distance_sorted:
-                current_place += 1
-                print(f'{current_place:>3}. User {user:<20} {distance / 1000:<7.2f} Kilometer')
-        print(f'\n{50*"-"}\n')
-
-    def distance_type_comparison_relative(self, user_name_list: str | list[str] | None= None) -> None:
-        user_list = self.__user_input_to_object(user_name_list, 2)
-        if user_list is None:
-            print('\nRelativer Vergleich der Distanzen benötigt mindestens zwei User')
-            return
-        type_set: set[str] = set()
-        for user in user_list:
-            for train_type , train_distance in user.distance_type_sorted.items():
-                type_set.add(train_type)
-        type_list = sorted(type_set)
-        names = f'{user_list[0].name}, ' + ', '.join([user.name for user in user_list[1:]])
-        print(f'\nRelativer Vergleich der Distanzen von {names} für Verkehrsmittel:')
-        for type in type_list:
-            user_type_distance : dict[str,float] = dict()
-            for user in user_list:
-                user_type_distance[user.name] = (user.distance_type_sorted.get(type,{}).get('distance', 0) / user.exported_days)
-            user_type_distance_sorted = sorted(user_type_distance.items(), key=lambda x: (x[1]), reverse=True)
-            current_place = 0
-            print(f'\nFür {type}:')
-            for user, dic in user_type_distance_sorted:
-                current_place += 1
-                print(f'{current_place:>3}. User {user:<20} {dic / 1000:<7.4f} Kilometer pro Tag')
-
-    def operator_user_comparison(self, user_name_list: str | list[str] | None= None) -> None:
-        user_list = self.__user_input_to_object(user_name_list, 2)
-        if user_list is None:
-            print('\nVergleich der Distanzen der Betreiber benötigt mindestens zwei User')
-            return
-        dicts = [user.distance_operator_sorted for user in user_list]
-        common_operators = set(dicts[0].keys()).intersection(*(d.keys() for d in dicts[1:]))
-        names = f'{user_list[0].name}, ' + ', '.join([user.name for user in user_list[1:]])
-        if not common_operators:
-            print(f'{names} haben keine gemeinsamen Betreiber')
-            return
-        if 'Unknown Operator' in common_operators:
-            common_operators.remove('Unknown Operator')
-        print(f'Hier die gemeinsamen Betreiber von {names}:\n')
-        common_operators = sorted(common_operators)
-        for operator in common_operators:
-            print(f'\nBetreiber {operator}:')
-            operators_distances: list[tuple] = []
-            for user in user_list:
-                operators_distances.append((user.name, user.distance_operator_sorted.get(operator)))
-            operators_distances = sorted(operators_distances, key=lambda x: (x[1].get('distance')), reverse=True)
-            string_operator = ''
-            for user_name, dic in operators_distances:
-                string_operator += f'{user_name}: {dic.get('distance', 0)/1000:.2f} km und {dic.get('time', 0)/60:.0f}\n'
-            print(string_operator)
-        print(f'\n{50 * "-"}\n')
-
-
-    def delay_analysis(self, user_name_list: str | list[str]= None) -> None:
-        user_list = self.__user_input_to_object(user_name_list, 1)
-        if user_list is None:
-            return
-        for user in user_list:
-            user.delay_analysis()
-
-    def station_analysis(self, user_name_list: str | list[str]= None) -> None:
-        user_list = self.__user_input_to_object(user_name_list, 1)
-        if user_list is None:
-            return
-        for user in user_list:
-            user.visited_station()
-
-    def station_analysis_with_via(self, user_name_list: str | list[str]= None) -> None:
-        user_list = self.__user_input_to_object(user_name_list, 1)
-        if user_list is None:
-            return
-        for user in user_list:
-            user.visited_station_with_via()
-
-    def shared_station_analysis(self, user_name_list: str | list[str]= None) -> None:
-        user_list = self.__user_input_to_object(user_name_list, 2)
-        if user_list is None:
-            return
-        dicts = [user.visited_stations for user in user_list]
-        common_stations = set(dicts[0].keys()).intersection(*(d.keys() for d in dicts[1:]))
-        names = f'{user_list[0].name}, ' + ', '.join([user.name for user in user_list[1:]])
-        if not common_stations:
-            print(f'{names} haben keine gemeinsamen Stationen')
-            return
-        print(f'Hier die gemeinsamen Stationen von {names}:\n')
-        common_stations = sorted(common_stations)
-        for station in common_stations:
-            print(f'\nStation {station}:')
-            visits: list[tuple]= []
-            for user in user_list:
-                visits.append((user.name, user.visited_stations.get(station)))
-            visits = sorted(visits, key=lambda x: (x[1]), reverse=True)
-            string_visits = ''
-            for user_name, number in visits:
-                string_visits += f'{user_name}: {number}  '
-            print(string_visits)
-        print(f'\n{50*"-"}\n')
-
-    def vehicle_analysis(self, user_name_list: str | list[str]= None) -> None:
-        user_list = self.__user_input_to_object(user_name_list, 1)
-        if user_list is None:
-            return
-        for user in user_list:
-            user.vehicle_analysis()
-
-    def shared_trips_analysis(self, user_name_list: str | list[str]= None) -> None:
-        user_list = self.__user_input_to_object(user_name_list, 1)
-        if user_list is None:
-            return
-        trip_id_dict_unfiltered = {}
-        trip_id_dict_filtered = {}
-        trip_dict_object = {}
-        for j in self.__journeys:
-            if j.user_name in user_list:
-                trip_id_dict_unfiltered[j.trip_id] = trip_id_dict_unfiltered.get(j.trip_id, []) + [j.user_id]
-                trip_dict_object.update({(j.trip_id, j.user_name): j})
-
-
-        for trip_id, user_ids in trip_id_dict_unfiltered.items():
-            if len(user_ids) >= 2:
-                user_names = []
-                for user_id in user_ids:
-                    user_names.append(self.__user_id_dict.get(user_id))
-                user_names.sort(reverse=True)
-                trip_id_dict_filtered[trip_id] = user_names
-
-        for trip_id, user_names in trip_id_dict_filtered.items():
-            for user_name in user_names:
-                print(f'{user_name}: {trip_dict_object.get((trip_id, user_name.name), 'N/A')}')
-            print('\n')
-
 
 
     def __user_input_to_object(self, user_name_list: str | list[str] | None= None, min_requirement: int = 1) -> list[User] | None:
@@ -1187,24 +822,6 @@ class Traewelling:
 
         return user_list
 
-    def do_whole_calculations(self, user_name_list = None) -> None:
-        self.distance_analysis(user_name_list)
-        self.delay_analysis(user_name_list)
-        self.station_analysis(user_name_list)
-        if len(self.__user_id_dict) > 1:
-            self.distance_type_comparison_relative(user_name_list)
-            self.distance_type_comparison_absolut(user_name_list)
-            self.operator_user_comparison(user_name_list)
-            self.shared_station_analysis(user_name_list)
-        print("\033[91mThank You, for träwelling with Deutsche Bahn!\033[0m")
-        print(f'\n{50 * "-"}\n')
-
-    def create_journeys_csv(self, user_name_list: str | list[str]= None) -> None:
-        user_list = self.__user_input_to_object(user_name_list, 1)
-        if user_list is None:
-            return
-        for user in user_list:
-            user.create_journeys_csv()
 
     def create_user_excel(self, user_name_list: str | list[str]= None) -> None:
         user_list = self.__user_input_to_object(user_name_list, 1)
@@ -1213,6 +830,211 @@ class Traewelling:
         for user in user_list:
             user.create_excel()
 
+
+    def create_shared_excel(self, user_name_list: str | list[str]= None) -> None:
+        user_list = self.__user_input_to_object(user_name_list, 2)
+        if user_list is None:
+            print('Wenn du noch weitere User hinzufügst, werden hier spannende Auswertungen erstellt')
+            print(f'\n{50 * "-"}\n')
+            return
+
+        visits_dataframe: pd.DataFrame = pd.DataFrame()
+        visits_dataframe_filterable :pd.DataFrame = pd.DataFrame()
+
+        dicts = [user.stations_with_via for user in user_list]
+        station_counter = Counter(operator for d in dicts for operator in d.keys())
+        common_stations = []
+        for station, count in station_counter.items():
+            if count >= max(2, len(user_list) - 1 if len(user_list) < 5 else len(user_list) - 2):
+                common_stations.append(station)
+
+        if common_stations:
+            visits_data = []
+            visits_data_filterable = []
+            common_stations = sorted(common_stations)
+            for station in common_stations:
+                visits: list[tuple] = []
+                for user in user_list:
+                    visits.append((user.name, user.stations_with_via.get(station,0)))
+                visits = sorted(visits, key=lambda x: (x[1]), reverse=True)
+                current_station = {'Haltestelle': station}
+                for index, (user, number_with_via) in enumerate(visits):
+                    user_obj = self.__user_name_dict[user]
+                    number_without_via = user_obj.visited_stations.get(station,0)
+                    visits_data.append({'Haltestelle':(station if index==0 else ''),
+                                        'User':user,
+                                        'Anzahl ohne Via' : number_without_via,
+                                        'Anzahl mit Via':number_with_via,
+                                        'Pro Monat ohne Via': round(number_without_via/user_obj.exported_days * 30, 3),
+                                        'Pro Monat mit Via': round(number_with_via/user_obj.exported_days * 30, 3),
+                                        'Umstiegquote': (f'{number_without_via/number_with_via * 100:.2f}%') if number_with_via > 0 else ''})
+                    current_station[f'Anzahl ohne Via ({user})'] = number_without_via
+                    current_station[f'Anzahl mit Via ({user})'] = number_with_via
+                    current_station[f'Umstiegquote (%) ({user})'] = (round(number_without_via/number_with_via * 100,2)) if number_with_via > 0 else ''
+                visits_data.append({'Haltestelle': '',
+                                    'User': '',
+                                    'Anzahl ohne Via': '',
+                                    'Anzahl mit Via': '',
+                                    'Pro Monat ohne Via': '',
+                                    'Pro Monat mit Via': '',
+                                    'Umstiegquote': ''})
+                visits_data_filterable.append(current_station)
+
+            visits_dataframe = pd.DataFrame(visits_data)
+            visits_dataframe_filterable = pd.DataFrame(visits_data_filterable)
+
+
+
+        type_set: set[str] = set()
+        for user in user_list:
+            for train_type, train_distance in user.distance_type_sorted.items():
+                type_set.add(train_type)
+        type_list = sorted(type_set)
+        type_data = []
+        for type in type_list:
+            user_list.sort(reverse=True, key = lambda x: (x.distance_type_sorted.get(type, {}).get('distance', 0)))
+            for index, user in enumerate(user_list):
+                user_type_dict = user.distance_type_sorted.get(type, {})
+                h, m = divmod(user_type_dict.get('time',0)/60, 60)
+                type_data.append({'Kategorie':(type if index==0 else ''),
+                                  'User':user.name,
+                                  'Distanz (km)': round(user_type_dict.get('distance', 0)/1000, 2),
+                                  'Distanz pro Tag (km)': round(user_type_dict.get('distance', 0)/user.exported_days/1000, 2),
+                                  'Zeit (hh:mm)': f"{h:02.0f}:{int(round(m, 0)):02}",
+                                  'Zeit pro Tag (min)': round(user_type_dict.get('time', 0)/user.exported_days/60, 2),
+                                  'Fahrten': user_type_dict.get('sum',0),
+                                  'Fahrten pro Woche': round(user_type_dict.get('sum', 0)/user.exported_days*7, 2)})
+            type_data.append({'Kategorie': '',
+                              'User': '',
+                              'Distanz (km)': '',
+                              'Distanz pro Tag (km)': '',
+                              'Zeit (hh:mm)': '',
+                              'Zeit pro Tag (min)': '',
+                              'Fahrten': '',
+                              'Fahrten pro Woche': ''})
+
+        type_dataframe = pd.DataFrame(type_data)
+
+        dicts = [user.distance_operator_sorted for user in user_list]
+        operator_counter = Counter(operator for d in dicts for operator in d.keys())
+        common_operators = []
+        for station, count in operator_counter.items():
+            if count >= max(2, len(user_list) - 1 if len(user_list) < 5 else len(user_list) - 2):
+                common_operators.append(station)
+
+        operator_data = []
+        if common_operators:
+            if 'Unknown Operator' in common_operators:
+                common_operators.remove('Unknown Operator')
+            common_operators = sorted(common_operators)
+            operator_data = []
+            for operator in common_operators:
+                user_list.sort(reverse=True, key=lambda x: (x.distance_operator_sorted.get(operator, {}).get('distance', 0)))
+                for index, user in enumerate(user_list):
+                    user_operator_dict = user.distance_operator_sorted.get(operator, {})
+                    h, m = divmod(user_operator_dict.get('time', 0) / 60, 60)
+                    operator_data.append({'Betreiber': (operator if index == 0 else ''),
+                                      'User': user.name,
+                                      'Distanz (km)': round(user_operator_dict.get('distance', 0) / 1000, 2),
+                                      'Distanz pro Tag (km)': round(
+                                          user_operator_dict.get('distance', 0) / user.exported_days / 1000, 2),
+                                      'Zeit (hh:mm)': f"{h:02.0f}:{int(round(m, 0)):02}",
+                                      'Zeit pro Tag (min)': round(
+                                          user_operator_dict.get('time', 0) / user.exported_days / 60, 2),
+                                      'Geschwindigkeit (km/h)': (round(user_operator_dict.get('distance', 0)/user_operator_dict.get('time', 0)*3.6, 2)
+                                                                 if user_operator_dict.get('time', 0) != 0 else ''),
+                                      'Fahrten': user_operator_dict.get('sum', 0),
+                                      'Fahrten pro Woche': round(
+                                          user_operator_dict.get('sum', 0) / user.exported_days * 7, 2)})
+                operator_data.append({'Betreiber': '',
+                                  'User': '',
+                                  'Distanz (km)': '',
+                                  'Distanz pro Tag (km)': '',
+                                  'Zeit (hh:mm)': '',
+                                  'Zeit pro Tag (min)': '',
+                                  'Fahrten': '',
+                                  'Fahrten pro Woche': ''})
+
+        operator_dataframe = pd.DataFrame(operator_data)
+
+        shared_trip_data = []
+
+        trip_id_dict = {}
+        for j in self.__journeys:
+            if not trip_id_dict.get(j.trip_id):
+                trip_id_dict[j.trip_id] = []
+            trip_id_dict[j.trip_id].append((self.__user_id_dict.get(j.user_id), j))
+
+        for trip_id, list_user_journey in trip_id_dict.items():
+            if len(list_user_journey) > 1:
+                list_user_journey.sort(key=lambda x: x[0] ,reverse=True)
+                for index, (user, journey) in enumerate(list_user_journey):
+                    shared_trip_data.append({'Kategorie':(journey.train_type if index == 0 else ''),
+                                             'Linie': (journey.line_name if index == 0 else ''),
+                                             'User': user.name,
+                                             'Starthaltestelle': journey.origin_stop,
+                                             'Abfahrtszeit (ist)': journey.departure_real.strftime('%d.%m.%Y %H:%M'),
+                                             'Zielhaltestelle':journey.destination_stop,
+                                             'Ankunftszeit (ist)': journey.arrival_real.strftime('%d.%m.%Y %H:%M'),
+                                             'Entfernung (km)': round(journey.journey_distance / 1000, 3),
+                                             'Punkte': journey.journey_points,
+                                             'Link': f'=HYPERLINK("https://traewelling.de/status/{journey.status_id}",'
+                                                     f'"https://traewelling.de/status/{journey.status_id}")',
+                                             '_color': ('color:black' if not journey.realtime_availability else
+                                                        ('color:red' if journey.delayed_by_standard(self.__delay_standard) else 'color:green')),})
+                shared_trip_data.append({'Kategorie': '', 'Linie': '','User': '','Starthaltestelle': '','Abfahrtszeit (ist)': '',
+                                         'Zielhaltestelle': '','Ankunftszeit (ist)': '','Entfernung (km)': '','Punkte': '',
+                                         'Link': '','_color': '' })
+
+        shared_trip_dataframe = pd.DataFrame(shared_trip_data)
+
+
+        user_list.sort(key=lambda x: x.name)
+        names = f'{user_list[0].name}_' + '_'.join([user.name for user in user_list[1:]])
+        try:
+            with pd.ExcelWriter(f"{names}'s_shared_data.xlsx", engine='openpyxl') as writer:
+                if not visits_dataframe.empty:
+                    visits_dataframe.to_excel(writer, sheet_name='Haltestellen', index=False)
+                    visits_dataframe_filterable.to_excel(writer, sheet_name='Haltestellen (filterbar)', index=False)
+                type_dataframe.to_excel(writer, sheet_name='Kategorie', index=False)
+                if not operator_dataframe.empty:
+                    operator_dataframe.to_excel(writer, sheet_name='Betreiber', index=False)
+                if not shared_trip_dataframe.empty:
+                    styled_trip_dataframe = shared_trip_dataframe.style.apply(lambda row:
+                                                                              [row['_color'] if col in [
+                                                                                  'Ankunftszeit (ist)',
+                                                                                  'Abfahrtszeit (ist)']
+                                                                               else '' for col in row.index], axis=1)
+                    styled_trip_dataframe.hide(['_color'], axis='columns')
+                    styled_trip_dataframe.to_excel(writer, sheet_name='Gemeinsame Fahrten', index=False)
+
+
+                # --- AB HIER: Breite anpassen | Achtung: KI generiert ---
+                for sheet_name in writer.sheets:
+                    worksheet = writer.sheets[sheet_name]
+                    for col in worksheet.columns:
+                        max_length = 0
+                        column = col[0].column_letter  # Den Buchstaben der Spalte (A, B, C...) holen
+
+                        for cell in col:
+                            try:
+                                if len(str(cell.value)) > max_length:
+                                    max_length = len(str(cell.value))
+                            except:
+                                pass
+
+                        # Ein kleiner Puffer (ca. 2 Einheiten), damit es nicht zu eng ist
+                        adjusted_width = (max_length + 2)
+                        worksheet.column_dimensions[column].width = adjusted_width
+
+                print(f"Created {names}'s_shared_data.xlsx")
+
+        except Exception as e:
+            print(f"{names}'s_shared_data.xlsx could not be created:\n\n{e}")
+
+        print(f'\n{50 * "-"}\n')
+
+
     def create_gis_single_csv(self, user_name_list: str | list[str]= None) -> None:
         user_list = self.__user_input_to_object(user_name_list, 1)
         if user_list is None:
@@ -1220,7 +1042,7 @@ class Traewelling:
         header_row = ['y', 'x', 'Stopname', 'Username']
         journey_rows = []
         for j in self.__journeys:
-            if j.user_name in user_list:
+            if self.__user_name_dict.get(j.user_name) in user_list:
                 journey_rows.extend([[j.destination_coordinates[0], j.destination_coordinates[1], j.destination_stop, j.user_name],
                                      [j.origin_coordinates[0], j.origin_coordinates[1], j.origin_stop, j.user_name]])
         with open(f"gis_single_export.csv", 'w', newline='', encoding='utf-8') as datei:
@@ -1238,7 +1060,7 @@ class Traewelling:
         journey_rows = []
         journey_rows_dict = {}
         for j in self.__journeys:
-            if j.user_name in user_list:
+            if self.__user_name_dict.get(j.user_name) in user_list:
                 destination_data = (j.destination_coordinates[0], j.destination_coordinates[1], j.destination_stop, j.user_name)
                 origin_data = (j.origin_coordinates[0], j.origin_coordinates[1], j.origin_stop, j.user_name)
 
@@ -1263,8 +1085,12 @@ if __name__ == '__main__':
     start_time = time()
     traewelling = Traewelling()
     traewelling.create_user_excel()
+    traewelling.create_shared_excel()
+    traewelling.create_gis_number_csv()
+    traewelling.create_gis_single_csv()
     end_time = time()
-    print(f'Traewelling took {end_time - start_time} seconds')
+    print(f"\033[91mThank You, for träwelling {end_time - start_time} seconds with Deutsche Bahn!\033[0m")
+    print(f'\n{50 * "-"}\n')
 
 
 

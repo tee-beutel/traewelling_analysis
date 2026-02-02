@@ -41,7 +41,7 @@ pip install -r requirements.txt
 
 echo -e "\n${GREEN}[4/4] Starte Analyse...${NC}"
 echo "--------------------------------------------------"
-python traewelling_analysis_v6.0.py
+python traewelling_analysis_v6.1.py
 
 echo -e "\n--------------------------------------------------"
 echo -e "${GREEN}Analyse war erfolgreich! Excel wurde erstellt.${NC}"

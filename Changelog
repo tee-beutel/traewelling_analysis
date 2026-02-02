@@ -1,3 +1,117 @@
+Changelog v6.0 -> v6.1
+✨ Neue Funktionen (Features)
+
+    Shared Excel Export (create_shared_excel):
+
+        Es wurde eine komplett neue Methode implementiert, die eine Excel-Datei erstellt, um mehrere User miteinander zu vergleichen.
+
+        Gemeinsame Haltestellen: Analyse, welche Haltestellen von mehreren Usern besucht wurden (inkl. Umstiegsquote und Via-Halte).
+
+        Kategorie- & Betreiber-Vergleich: Vergleicht Distanzen, Zeiten und Geschwindigkeiten verschiedener User pro Zugtyp und Betreiber.
+
+        Gemeinsame Fahrten (Shared Trips): Identifiziert Fahrten, bei denen mehrere User im selben Zug saßen.
+
+        Formatierung: Die Tabelle "Gemeinsame Fahrten" nutzt bedingte Formatierung (Farben) für Echtzeitdaten und Verspätungen.
+
+    Erweiterte Excel-Formatierung:
+
+        In allen generierten Excel-Dateien werden die Spaltenbreiten nun automatisch an den Inhalt angepasst (Auto-Width via openpyxl), was die Lesbarkeit massiv verbessert.
+
+    Erweiterte Tag-Auswertung:
+
+        Zusätzlich zur Fahrzeugnummer werden nun auch folgende Tags aus Träwelling ausgelesen und gespeichert (sofern vorhanden):
+
+            trwl:journey_number (Fahrtnummer)
+
+            trwl:locomotive_class (Baureihe)
+
+            trwl:ticket (Genutztes Ticket)
+
+            trwl:wagon_class (Wagenklasse)
+
+🛠️ Verbesserungen & Änderungen
+
+
+    Spezifisches Mapping für Braunschweig:
+
+        Es wurde ein Hardcoded-Fix für "Braunschweig Hbf ZOB" hinzugefügt, der diesen nun konsistent zu "Braunschweig Hbf (HBS)" umbenennt, um Duplikate in der Statistik zu vermeiden.
+
+    Bereinigung der Imports:
+
+        Der Block am Anfang des Skripts, der automatisch versucht timezonefinder und tzdata via subprocess nachzuinstallieren, wurde entfernt. Das Skript erwartet nun, dass die Umgebung mit der requierements.txt korrekt aufgesetzt ist.
+
+    Importe: Counter aus collections wurde hinzugefügt (für die Statistik der gemeinsamen Stationen).
+
+
+🚀 Ausführung (__main__)
+
+    Das Skript führt nun standardmäßig alle Export-Funktionen aus:
+
+        Einzel-User Excel
+
+        Shared Excel
+
+        GIS Number CSV
+
+        GIS Single CSV
+
+Viele nicht mehr benötigte Funktionen wurden entfernt:
+   
+In der Klasse User:
+
+Folgende Methoden, die Statistiken berechneten und printeten, wurden gelöscht:
+
+    __user_distance_analysis_output (Textausgabe der Distanzanalyse)
+
+    distance_analysis_per_user
+
+    __delay_analysis_output (Textausgabe der Verspätungsstatistik)
+
+    delay_analysis (Die Wrapper-Funktion für die Ausgabe)
+
+    __visited_station_output (Liste der Haltestellen im Terminal)
+
+    visited_station
+
+    __visited_station_with_via_output
+
+    visited_station_with_via
+
+    __vehicle_output
+
+    vehicle_analysis
+
+In der Klasse Traewelling (Hauptklasse):
+
+Da die User-Methoden entfernt wurden, wurden auch die entsprechenden Aufruf-Methoden in der Hauptklasse gelöscht:
+
+    __str__ (Gibt jetzt keinen String aller Fahrten mehr zurück)
+
+    user_journey_list
+
+    distance_analysis
+
+    distance_type_comparison_absolut (Vergleich im Terminal -> jetzt in Shared Excel)
+
+    distance_type_comparison_relative (Vergleich im Terminal -> jetzt in Shared Excel)
+
+    operator_user_comparison
+
+    delay_analysis
+
+    station_analysis
+
+    station_analysis_with_via
+
+    shared_station_analysis (Vergleich gemeinsamer Stationen im Terminal -> jetzt in Shared Excel)
+
+    vehicle_analysis
+
+    shared_trips_analysis (Auflistung gemeinsamer Fahrten im Terminal -> jetzt in Shared Excel)
+
+    do_whole_calculations (Diese "Alles-auf-einmal"-Funktion für die Konsole existiert nicht mehr)
+
+
 📝 Changelog: traewelling_analysis v5 ➔ v6.0
 🚀 Neue Hauptfeatures
 
