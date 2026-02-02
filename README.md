@@ -19,7 +19,7 @@ Doppelklicke auf die Datei `run_analysis_win.bat`.
 ```bash
 chmod +x run_analysis_mac.sh
 ./run_analysis.sh
-
+```
 ---
 
 ## 🛠 Wie es funktioniert (Die Technik dahinter)
