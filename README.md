@@ -1,6 +1,6 @@
-# Traewelling Analysis v6.0 🚄📊
+# Traewelling Analysis v6.1 🚄📊
 
-Willkommen beim ultimativen Tool für Statistik-Liebhaber und Bahn-Nerds! Dieses Skript analysiert deine **Träwelling-Exporte** (JSON-Dateien) und verwandelt sie in detaillierte Excel-Tabellen, CSV-Statistiken und eine Übersicht deiner meistbefahrenen Strecken und genutzten Fahrzeuge. Damit du sofort startklar bist habe ich dir auch meine .json's zur Verfügung gestellt.
+Willkommen beim ultimativen Tool für Statistik-Liebhaber und Bahn-Nerds! Dieses Skript analysiert deine **Träwelling-Exporte** (JSON-Dateien) und verwandelt sie in detaillierte Excel-Tabellen und GIS-Daten. Jetzt neu mit **Vergleichsfunktionen für mehrere User** und automatischer Formatierung! Damit du sofort startklar bist, habe ich dir auch meine .json's zur Verfügung gestellt.
 
 ---
 
@@ -19,8 +19,6 @@ Doppelklicke auf die Datei `run_analysis_win.bat`.
 ```bash
 chmod +x run_analysis_mac.sh
 ./run_analysis.sh
-
-```
 
 ---
 
@@ -66,7 +64,7 @@ Ein sauberer Ordner sollte so aussehen:
 
 | Datei / Ordner | Beschreibung |
 | --- | --- |
-| `traewelling_analysis_v6.0.py` | Das Hauptgehirn (Python-Skript). |
+| `traewelling_analysis_v6.1.py` | Das Hauptgehirn (Python-Skript). |
 | `requirements.txt` | Die Liste der benötigten Bibliotheken. |
 | `*.json` | Deine Träwelling-Exporte (beliebig viele). |
 | `run_analysis.bat` / `.sh` | Deine Startrampe für das Programm. |
@@ -76,10 +74,12 @@ Ein sauberer Ordner sollte so aussehen:
 
 ## 📊 Was erhältst du am Ende?
 
-Nach dem Durchlauf findest du neue Dateien in deinem Ordner:
+Nach dem Durchlauf findest du neue Dateien in deinem Ordner. Das Skript erstellt nun keine Text-Ausgaben mehr im Terminal, sondern exportiert alles sauber in Dateien:
 
-* **`Username's_data.xlsx`**: Die "Heilige Gral"-Datei mit Reitern für Betreiber-Statistiken, Pünktlichkeitsquoten, Fahrzeuglisten und Haltestellen-Rankings.
-* **`gis_number_export.csv`**: Perfekt für Karten-Fans, die ihre Reisen in Programmen wie QGIS visualisieren wollen.
+* **`Username's_data.xlsx`**: Die "Heilige Gral"-Datei. Jetzt **automatisch formatiert** (angepasste Spaltenbreiten). Enthält Reiter für Fahrtenliste, Statistiken, Betreiber, Linien und Haltestellen (mit & ohne Zwischenhalte). Neu: Erweiterte Fahrzeug-Infos (Baureihe, Wagenklasse, Ticket).
+* **`User1_User2_shared_data.xlsx`** *(Neu in v6.1)*: Wird erstellt, wenn Daten mehrerer User gefunden werden. Vergleicht Distanzen, Zeiten und Haltestellen der User und listet **gemeinsame Fahrten** auf (inkl. farblicher Markierung bei Verspätungen).
+* **`gis_number_export.csv`**: Aggregierte Koordinaten für Karten-Fans (Heatmap-Style: Wie oft war ich wo?).
+* **`gis_single_export.csv`**: Jede einzelne Fahrt als Punktpaar (Start/Ziel) für detaillierte Visualisierungen in QGIS & Co.
 
 Weitere Funktionen werden laufend hinzugefügt...
 ---
