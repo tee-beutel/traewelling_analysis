@@ -20,6 +20,14 @@ Doppelklicke auf die Datei `run_analysis_win.bat`.
 chmod +x run_analysis_mac.sh
 ./run_analysis.sh
 ```
+
+### Linux
+
+Öffne das Terminal im Ordner und gib ein:
+
+```bash
+bash run_analysis_linux.sh
+```
 ---
 
 ## 🛠 Wie es funktioniert (Die Technik dahinter)
