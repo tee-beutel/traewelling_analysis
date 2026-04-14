@@ -18,7 +18,8 @@ import pandas as pd
 from timezonefinder import TimezoneFinder
 import reverse_geocoder as rg
 import traceback
-
+import openpyxl
+import jinja2
 class Journey():
     def __init__(self, data, tf: TimezoneFinder, timezone_info: dict, coordinates_places_map: dict):
         train_type_to_readable_dict = {'regional': 'Regionalzug', 'bus': 'Bus', 'ferry': 'Fähre',
@@ -1847,16 +1848,16 @@ class Traewelling:
         print(f'\n{50 * "-"}\n')
 
 def traewelling_analysis(users_for_api_get: list[str] | str | None = None, delay_standard: int = 300,
-                 start_date : str = '2000-01-01', end_date : str = '3000-01-01',
-                 search_for_json : bool = True, do_users_analysis: bool = True, do_shared_analysis: bool = True,
-                 do_geo_analysis: bool = False, search_for_correct_usernames: bool = False,
-                 update_downloaded_checkins: bool = False, update_all_downloaded_users=False)->None:
+                         start_date : str = '2000-01-01', end_date : str = '3000-01-01',
+                         search_for_json : bool = True, do_users_analysis: bool = True, do_shared_analysis: bool = True,
+                         do_geo_analysis: bool = False, search_for_correct_usernames: bool = False,
+                         update_already_downloaded_checkins: bool = False, update_all_downloaded_users=False)->None:
     start_time = time()
     try:
         traewelling = Traewelling(users_for_api_get = users_for_api_get, delay_standard=delay_standard,
                                   start_date=start_date, end_date=end_date, search_for_json=search_for_json,
                                   search_for_correct_usernames=search_for_correct_usernames,
-                                  update_past_downloaded_checkins=update_downloaded_checkins,
+                                  update_past_downloaded_checkins=update_already_downloaded_checkins,
                                   update_all_downloaded_users=update_all_downloaded_users)
         if do_users_analysis:
             traewelling.create_user_excel()
@@ -1881,8 +1882,8 @@ def traewelling_analysis(users_for_api_get: list[str] | str | None = None, delay
 
 
 if __name__ == '__main__':
-    traewelling_analysis(users_for_api_get= ['Hier die', 'verschiedenen User eintragen'],do_users_analysis=True, do_shared_analysis=True, search_for_json=True,
-                         do_geo_analysis=True, search_for_correct_usernames=False, update_downloaded_checkins= False,
+    traewelling_analysis(users_for_api_get= ['Hier die', 'verschiedenen User eintragen'], do_users_analysis=True, do_shared_analysis=True, search_for_json=True,
+                         do_geo_analysis=True, search_for_correct_usernames=False, update_already_downloaded_checkins= False,
                          update_all_downloaded_users = True)#, start_date='2026-03-14', end_date='2026-03-31'
 
 

@@ -6,8 +6,8 @@ Willkommen beim ultimativen Tool für Statistik-Liebhaber und Bahn-Nerds! Dieses
 
 ## 🚀 Schnellstart
 
-Das ist die neue Version, die nun vollständig über die API funktioniert. Benutze das Tool am besten über eine IDE, wie PyCharm. Die Einstellungen findest du ganz unten, leider bin ich noch nicht zu einer Anleitung gekommen, probiere einfach selbst aus, es ist einigermaßen intiutiv
+Das ist die neue Version, die nun vollständig über die API funktioniert. Benutze das Tool am besten über eine IDE, wie PyCharm. Die Einstellungen findest du ganz unten, leider bin ich noch nicht zu einer Anleitung gekommen, probiere einfach selbst aus, es ist einigermaßen intuitiv. An dieser Stelle nur zwei Hinweise, User werden im Format ["user1","user2",...] eingetragen, wenn nur bisherige User aktualisiert werden sollen einfach None eintragen.
 
 ## Achtung
 
-Denke daran in die **.api_token.txt** deine API-Token von träwelling einzutragen, den bekommst du von der Website
+Denke daran in die **.api_token.txt** deine API-Token von Träwelling einzutragen, den bekommst du von der Website
