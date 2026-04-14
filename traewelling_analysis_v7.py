@@ -1155,7 +1155,6 @@ class Traewelling:
                                 user_json = user_response.json()
                                 userlist : dict = user_json.get('data', {})
 
-                                print(userlist)
                                 possible_usernames = [item.get('username') for item in userlist]
                                 possible_users_infos = [{'bio': userinfo.get('bio', None),
                                                  'displayName': userinfo.get('displayName', None),
