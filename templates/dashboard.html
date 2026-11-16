@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard - {{ username }} (v9)</title>
+    
+    <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.default.min.css" rel="stylesheet">
+    
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background-color: #f4f4f9; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .btn { padding: 10px 15px; color: white; background-color: #004488; text-decoration: none; border-radius: 5px; border: none; cursor: pointer; font-size: 15px; display: inline-block; transition: background-color 0.3s ease; }
+        .btn:hover { background-color: #003366; }
+        .btn:disabled { background-color: #999; cursor: not-allowed; }
+        .btn-logout { background-color: #555; float: right; }
+        ul { list-style: none; padding: 0; margin-bottom: 20px; }
+        li { background: #eee; margin: 5px 0; padding: 10px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; transition: all 0.3s ease; }
+        
+        .grid-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; font-weight: bold; margin-bottom: 5px; }
+        .form-group input[type="text"], .form-group input[type="date"] { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        
+        .ts-control { border-radius: 4px; border: 1px solid #ccc; padding: 8px; }
+        
+        #terminalBox { display: none; margin-top: 20px; }
+        #statusLogs { height: 260px; overflow-y: scroll; font-family: 'Courier New', monospace; font-size: 13px; background: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+        .badge-new { background-color: #28a745; color: white; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: 3px; margin-left: 8px; text-transform: uppercase; }
+    </style>
+</head>
+<body>
+    <a href="/logout" class="btn btn-logout">Logout</a>
+    <h1>Moin, {{ username }} 👋</h1>
+
+    <div class="card">
+        <h2>Neue Auswertung generieren</h2>
+        <form id="generateForm">
+            <div class="grid-layout">
+                <div>
+                    <div class="form-group">
+                        <label>Startdatum (optional):</label>
+                        <input type="date" name="start_date" id="start_date">
+                    </div>
+                    <div class="form-group">
+                        <label>Enddatum (optional):</label>
+                        <input type="date" name="end_date" id="end_date">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="user-select">Ausgewählte User:</label>
+                        <select id="user-select" name="users" multiple placeholder="User auswählen oder eintippen...">
+                            <option value="{{ username }}" selected>{{ username }} (Dein Account)</option>
+                            {% for u in available_users %}
+                                {% if u != username %}
+                                    <option value="{{ u }}">{{ u }}</option>
+                                {% endif %}
+                            {% endfor %}
+                        </select>
+                        <small style="color: #666;">Klicke für bekannte User oder tippe einen neuen Namen ein und drücke Enter (Profile müssen öffentlich sein).</small>
+                    </div>
+                </div>
+
+                <div>
+                    <div class="form-group" style="background: #f9f9f9; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
+                        <label style="font-size: 16px; margin-bottom: 10px;">Auswahl & Einstellungen</label>
+                        
+                        <label style="font-weight: normal; display: block; margin-bottom: 8px; color: #004488;">
+                            <input type="checkbox" name="update_db" id="update_db" checked> 
+                            <b>Aktualisiere Datenbank</b> <small style="color: #555;">(Neue Fahrten suchen)</small>
+                        </label>
+                        
+                        <hr style="border: 0; border-top: 1px solid #ccc; margin: 12px 0;">
+                        
+                        <label style="font-weight: normal; display: block; margin-bottom: 8px;">
+                            <input type="checkbox" name="gen_excel" checked> Persönliches Excel-Fahrtenbuch
+                        </label>
+                        <label style="font-weight: normal; display: block; margin-bottom: 8px;">
+                            <input type="checkbox" name="gen_shared_excel" checked> Gemeinsames Excel-Dashboard <small style="color: #666;">(bei mehreren Usern)</small>
+                        </label>
+                        <label style="font-weight: normal; display: block; margin-bottom: 8px;">
+                            <input type="checkbox" name="gen_timeline" id="gen_timeline" checked> Interaktive Timeline (Zeitachse)
+                        </label>
+                        <label style="font-weight: normal; display: block; margin-bottom: 8px;">
+                            <input type="checkbox" name="gen_time" checked> Tageszeiten (Ganglinien) <br><small style="color: #666; margin-left:22px;">(Benötigt aktiviertes persönliches Excel-Fahrtenbuch)</small>
+                        </label>
+                        
+                        <label style="font-weight: normal; display: block; margin-bottom: 4px;">
+                            <input type="checkbox" name="gen_map" id="gen_map" checked> Interaktive Streckenkarte (Polylines)
+                        </label>
+                        <label id="label_gen_map_lite" style="font-weight: normal; display: block; margin-bottom: 8px; margin-left: 25px;">
+                            <input type="checkbox" name="gen_map_lite" id="gen_map_lite"> Lite-Version <small style="color: #666;">(Mobil-optimiert: Ohne Filter & Highlighting)</small>
+                        </label>
+                        
+                        <label style="font-weight: normal; display: block; margin-bottom: 4px;">
+                            <input type="checkbox" name="gen_stop_map" id="gen_stop_map" checked> Interaktive Haltestellenkarte
+                        </label>
+                        <label id="label_gen_stop_map_lite" style="font-weight: normal; display: block; margin-bottom: 8px; margin-left: 25px;">
+                            <input type="checkbox" name="gen_stop_map_lite" id="gen_stop_map_lite"> Lite-Version <small style="color: #666;">(Mobil-optimiert: Ohne Filter, Heatmap & Hub-Werte)</small>
+                        </label>
+
+                        <label style="font-weight: normal; display: block; margin-bottom: 8px;">
+                            <input type="checkbox" name="gen_delay" checked> Verspätungs-Graphen
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <button type="submit" class="btn" id="actionBtn" style="width: 100%; margin-top: 10px; background-color: #004488;">🚀 Auswertung starten</button>
+        </form>
+
+        <div id="terminalBox">
+            <h3 style="margin-bottom: 5px;">Prozess-Log:</h3>
+            <div id="statusLogs"></div>
+        </div>
+    </div>
+
+    <div class="card" id="filesContainer">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-bottom: 15px;">
+            <h2 style="margin: 0; border: none; padding: 0;">Deine erstellten Dateien (Privat)</h2>
+            <button type="button" class="btn" id="deleteBtn" style="background-color: #ffc107; color: black; font-size: 13px; padding: 8px 12px;" onclick="deleteFiles()">🗑️ Alle Löschen</button>
+        </div>
+        
+        {% if files %}
+            {% for group_name, group_files in files.items() %}
+                <div style="display: flex; justify-content: space-between; align-items: baseline; border-bottom: 2px solid #ddd; margin-top: 25px; padding-bottom: 5px;">
+                    <h3 class="group-header" data-group="{{ group_name }}" style="border: none; padding: 0; margin: 0; color: #004488; font-size: 18px;">{{ group_name }}</h3>
+                    <button type="button" class="btn" style="background-color: #dc3545; color: white; font-size: 11px; padding: 4px 8px;" onclick="deleteCategory('{{ group_name }}')">🗑️ Bereich löschen</button>
+                </div>
+                <ul data-group-list="{{ group_name }}">
+                {% for file in group_files %}
+                    <li data-filename="{{ file.name }}">
+                        <span>{{ file.name }}</span>
+                        <div>
+                            {% if not file.name.endswith('.xlsx') %}
+                                <a href="/files/view/{{ file.folder }}/{{ file.name }}" target="_blank" class="btn" style="background:#4363d8; font-size:12px; margin-right:5px;">Ansehen</a>
+                            {% endif %}
+                            <a href="/files/download/{{ file.folder }}/{{ file.name }}" class="btn" style="font-size:12px;">Download</a>
+                        </div>
+                    </li>
+                {% endfor %}
+                </ul>
+            {% endfor %}
+        {% else %}
+            <p id="noFilesMsg">Du hast noch keine Dateien generiert.</p>
+        {% endif %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+
+    <script>
+        let currentTaskId = null;
+        let pollInterval = null;
+        const actionBtn = document.getElementById('actionBtn');
+
+        // Tom Select initialisieren und in einer Variable speichern
+let userSelect = new TomSelect("#user-select", {
+    create: true,
+    plugins: ['remove_button'],
+    placeholder: "User auswählen oder eintippen...",
+    createFilter: function(input) { return input.trim().length > 0; }
+});
+
+// Das Paste-Ereignis auf dem internen Tom-Select-Eingabefeld abfangen
+userSelect.control_input.addEventListener('paste', function(e) {
+    e.preventDefault();
+
+    // Text aus der Zwischenablage holen
+    const pastedText = (e.clipboardData || window.clipboardData).getData('text');
+
+    // Klammern/Anführungszeichen entfernen (falls Reste einer Python-Liste im Spiel sind) und nach Komma trennen
+    const items = pastedText.replace(/[\[\]'"]/g, '').split(/,\s*/);
+
+    // Jeden User einzeln als Tag hinzufügen
+    items.forEach(item => {
+        const cleanItem = item.trim();
+        if (cleanItem.length > 0) {
+            userSelect.createItem(cleanItem);
+        }
+    });
+});
+
+        // Event-Listener für die Abhängigkeiten der Lite-Checkboxen inkl. Ausblenden
+        document.getElementById('gen_map').addEventListener('change', function() {
+            const liteLabel = document.getElementById('label_gen_map_lite');
+            const liteCheckbox = document.getElementById('gen_map_lite');
+            if (this.checked) {
+                liteLabel.style.display = 'block';
+                liteCheckbox.disabled = false;
+            } else {
+                liteLabel.style.display = 'none';
+                liteCheckbox.checked = false;
+                liteCheckbox.disabled = true;
+            }
+        });
+
+        document.getElementById('gen_stop_map').addEventListener('change', function() {
+            const liteLabel = document.getElementById('label_gen_stop_map_lite');
+            const liteCheckbox = document.getElementById('gen_stop_map_lite');
+            if (this.checked) {
+                liteLabel.style.display = 'block';
+                liteCheckbox.disabled = false;
+            } else {
+                liteLabel.style.display = 'none';
+                liteCheckbox.checked = false;
+                liteCheckbox.disabled = true;
+            }
+        });
+        
+        // Initialer Check beim Laden der Seite
+        document.getElementById('gen_map').dispatchEvent(new Event('change'));
+        document.getElementById('gen_stop_map').dispatchEvent(new Event('change'));
+
+        actionBtn.addEventListener('click', function(e) {
+            if (currentTaskId) {
+                e.preventDefault();
+                stopTask();
+            }
+        });
+
+        document.getElementById('generateForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            if (currentTaskId) return;
+            
+            actionBtn.innerHTML = '🛑 Stoppe Auswertung';
+            actionBtn.style.backgroundColor = '#dc3545';
+            actionBtn.type = 'button'; 
+
+            const terminalBox = document.getElementById('terminalBox');
+            const statusLogs = document.getElementById('statusLogs');
+            let seenFiles = new Set();
+            
+            document.querySelectorAll('li[data-filename]').forEach(el => {
+                seenFiles.add(el.getAttribute('data-filename'));
+            });
+
+            terminalBox.style.display = 'block';
+            statusLogs.innerHTML = 'Verbinde mit Server...<br>';
+            
+            fetch('/start_generation', {
+                method: 'POST',
+                body: new FormData(this)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    statusLogs.innerHTML += `<span style="color: red;">Fehler: ${data.error}</span>`;
+                    resetActionBtn();
+                    return;
+                }
+                
+                currentTaskId = data.task_id;
+                pollInterval = setInterval(() => {
+                    fetch('/task_status/' + currentTaskId)
+                    .then(res => res.json())
+                    .then(statusData => {
+                        statusLogs.innerHTML = statusData.logs.join('<br>');
+                        statusLogs.scrollTop = statusLogs.scrollHeight;
+                        
+                        if (statusData.new_files && statusData.new_files.length > 0) {
+                            statusData.new_files.forEach(file => {
+                                if (!seenFiles.has(file.name)) {
+                                    seenFiles.add(file.name);
+                                    addLiveFileToDOM(file);
+                                }
+                            });
+                        }
+                        
+                        if (statusData.status === 'completed' || statusData.status === 'error' || statusData.status === 'stopped') {
+                            clearInterval(pollInterval);
+                            resetActionBtn();
+                        }
+                    });
+                }, 1000);
+            })
+            .catch(err => {
+                statusLogs.innerHTML += `<span style="color: red;">Netzwerkfehler: ${err}</span>`;
+                resetActionBtn();
+            });
+        });
+
+        function stopTask() {
+            if (currentTaskId) {
+                actionBtn.disabled = true;
+                actionBtn.innerHTML = 'Wird gestoppt...';
+                fetch('/stop_task/' + currentTaskId, { method: 'POST' });
+            }
+        }
+
+        function resetActionBtn() {
+            actionBtn.disabled = false;
+            actionBtn.innerHTML = '🚀 Auswertung starten';
+            actionBtn.style.backgroundColor = '#004488';
+            actionBtn.type = 'submit';
+            currentTaskId = null;
+        }
+
+        function deleteFiles() {
+            if (confirm("Willst du wirklich alle deine generierten Dateien permanent löschen?")) {
+                fetch('/delete_files', { method: 'POST' })
+                .then(res => res.json())
+                .then(data => {
+                    if(data.success) {
+                        alert("Alle bisherigen Dateien wurden gelöscht.");
+                        const container = document.getElementById('filesContainer');
+                        
+                        const flexHeaders = container.querySelectorAll('div[style*="border-bottom: 2px solid"]');
+                        const lists = container.querySelectorAll('ul');
+                        flexHeaders.forEach(h => h.remove());
+                        lists.forEach(l => l.remove());
+                        
+                        if (!document.getElementById('noFilesMsg')) {
+                            const p = document.createElement('p');
+                            p.id = "noFilesMsg";
+                            p.textContent = "Du hast noch keine Dateien generiert.";
+                            container.appendChild(p);
+                        }
+                    }
+                });
+            }
+        }
+        
+        function deleteCategory(categoryName) {
+            if (confirm(`Willst du wirklich alle Dateien im Bereich "${categoryName}" löschen?`)) {
+                const formData = new FormData();
+                formData.append('category', categoryName);
+                
+                fetch('/delete_category', { method: 'POST', body: formData })
+                .then(res => res.json())
+                .then(data => {
+                    if(data.success) {
+                        const h3 = document.querySelector(`h3[data-group="${categoryName}"]`);
+                        if (h3) {
+                            h3.parentElement.remove();
+                        }
+                        const ul = document.querySelector(`ul[data-group-list="${categoryName}"]`);
+                        if (ul) {
+                            ul.remove();
+                        }
+                        
+                        const remainingLists = document.querySelectorAll('#filesContainer ul');
+                        if (remainingLists.length === 0 && !document.getElementById('noFilesMsg')) {
+                            const p = document.createElement('p');
+                            p.id = "noFilesMsg";
+                            p.textContent = "Du hast noch keine Dateien generiert.";
+                            document.getElementById('filesContainer').appendChild(p);
+                        }
+                    }
+                });
+            }
+        }
+
+        function addLiveFileToDOM(file) {
+            const container = document.getElementById('filesContainer');
+            const emptyMsg = document.getElementById('noFilesMsg');
+            if (emptyMsg) emptyMsg.remove();
+
+            let groupHeader = container.querySelector(`h3[data-group="${file.group_name}"]`);
+            let groupList = container.querySelector(`ul[data-group-list="${file.group_name}"]`);
+
+            if (!groupHeader) {
+                const headerContainer = document.createElement('div');
+                headerContainer.style.display = "flex";
+                headerContainer.style.justifyContent = "space-between";
+                headerContainer.style.alignItems = "baseline";
+                headerContainer.style.borderBottom = "2px solid #ddd";
+                headerContainer.style.marginTop = "25px";
+                headerContainer.style.paddingBottom = "5px";
+
+                groupHeader = document.createElement('h3');
+                groupHeader.className = 'group-header';
+                groupHeader.setAttribute('data-group', file.group_name);
+                groupHeader.textContent = file.group_name;
+                groupHeader.style.border = "none";
+                groupHeader.style.padding = "0";
+                groupHeader.style.margin = "0";
+                groupHeader.style.color = "#004488";
+                groupHeader.style.fontSize = "18px";
+                
+                const delBtn = document.createElement('button');
+                delBtn.type = "button";
+                delBtn.className = "btn";
+                delBtn.style.backgroundColor = "#dc3545";
+                delBtn.style.color = "white";
+                delBtn.style.fontSize = "11px";
+                delBtn.style.padding = "4px 8px";
+                delBtn.innerHTML = "🗑️ Bereich löschen";
+                delBtn.onclick = function() { deleteCategory(file.group_name); };
+
+                headerContainer.appendChild(groupHeader);
+                headerContainer.appendChild(delBtn);
+                container.appendChild(headerContainer);
+
+                groupList = document.createElement('ul');
+                groupList.setAttribute('data-group-list', file.group_name);
+                container.appendChild(groupList);
+            }
+
+            const li = document.createElement('li');
+            li.setAttribute('data-filename', file.name);
+            li.style.borderLeft = "4px solid #28a745";
+
+            let buttons = '';
+            if (!file.name.endsWith('.xlsx')) {
+                buttons += `<a href="/files/view/${file.folder}/${encodeURIComponent(file.name)}" target="_blank" class="btn" style="background:#4363d8; font-size:12px; margin-right:5px;">Ansehen</a>`;
+            }
+            buttons += `<a href="/files/download/${file.folder}/${encodeURIComponent(file.name)}" class="btn" style="font-size:12px;">Download</a>`;
+
+            li.innerHTML = `<span>${file.name} <span class="badge-new">Bereit</span></span><div>${buttons}</div>`;
+            groupList.prepend(li);
+        }
+    </script>
+</body>
+</html>

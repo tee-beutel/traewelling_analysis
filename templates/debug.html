@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Erweiterter Datenbank Debugger</title>
+    
+    <!-- Choices.js für den User Filter -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/choices.js/public/assets/styles/choices.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/choices.js/public/assets/scripts/choices.min.js"></script>
+
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f7f6; color: #333; padding: 20px; }
+        .container { max-width: 1000px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1, h2, h3 { color: #004488; }
+        .card { border: 1px solid #ddd; padding: 15px; margin-bottom: 15px; border-radius: 5px; background: #fafafa; }
+        
+        .filter-section { background: #eef5fa; padding: 15px; border-radius: 5px; margin-bottom: 20px; border: 1px solid #cce0f0; }
+        .filter-section label { font-weight: bold; margin-bottom: 8px; display: block; }
+        
+        details { background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 10px; margin-bottom: 10px; }
+        summary { font-weight: bold; cursor: pointer; color: #e63900; }
+        .item-row { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding: 10px 0; }
+        .item-row:last-child { border-bottom: none; }
+        .item-info { flex-grow: 1; }
+        .item-actions { display: flex; gap: 10px; align-items: center; }
+        
+        .btn { padding: 6px 12px; border: none; cursor: pointer; border-radius: 4px; font-weight: bold; text-decoration: none; font-size: 13px; color: white; }
+        .btn-check { background-color: #004488; }
+        .btn-check:hover { background-color: #003366; }
+        .btn-fix { background-color: #e63900; display: none; }
+        .btn-fix:hover { background-color: #cc3300; }
+        .btn-link { background-color: #3cb44b; }
+        .btn-link:hover { background-color: #2d8a39; }
+        .btn-mass { background-color: #e63900; margin-top: 10px; }
+        .btn-mass:hover { background-color: #cc3300; }
+        .btn-mass:disabled { background-color: #999; cursor: not-allowed; }
+        
+        .api-result-box { display: none; background: #222; color: #0f0; font-family: monospace; padding: 10px; border-radius: 4px; margin-top: 10px; white-space: pre-wrap; font-size: 12px; max-height: 300px; overflow-y: auto; }
+        .diff-reason { color: #fff; font-weight: bold; margin-bottom: 10px; display: block; border-bottom: 1px dashed #555; padding-bottom: 10px; }
+        
+        #log-container { display: none; margin-top: 20px; background: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 5px; height: 250px; overflow-y: auto; font-family: monospace; font-size: 13px; line-height: 1.5; }
+        #reload-btn { display: none; background-color: #3cb44b; margin-top: 15px; }
+
+        .btn-back { background-color: #004488; text-decoration: none; display: inline-block; color: white; padding: 10px 15px; border-radius: 4px; font-weight: bold; margin-top: 20px;}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🛠️ Erweiterter Datenbank Debugger</h1>
+        <p>Hier kannst du fehlerhafte API-Einträge bereinigen. Punkte 1 &amp; 2 können komplett im Schwung repariert werden, während 3 bis 9 detailliert geprüft werden können.</p>
+
+                <!-- Live-Sektion: Aktive Prozesse & Warteschlange -->
+        <div class="card" id="queue-live-card" style="border-left: 5px solid #004488; background: #fff; margin-bottom: 25px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 12px;">
+                <h3 style="margin: 0; color: #004488; display: flex; align-items: center; gap: 8px;">
+                    <span>⏳ Aktive Prozesse &amp; Warteschlange</span>
+                    <span id="queue-count-badge" style="font-size: 12px; background: #e0e0e0; color: #333; padding: 2px 8px; border-radius: 12px;">0 aktiv</span>
+                </h3>
+                <small style="color: #777; font-size: 12px;">Live-Aktualisierung alle 1.5s</small>
+            </div>
+            <div id="queue-list" style="display: flex; flex-direction: column; gap: 10px;">
+                <p style="color: #888; margin: 5px 0; font-size: 13px;">Keine aktiven Prozesse in der Warteschlange.</p>
+            </div>
+        </div>
+
+<div class="filter-section">
+            <label for="userFilter">👥 Nach betroffenen Usern filtern (aktualisiert auch live die Anzahl in den Überschriften):</label>
+            <select id="userFilter" multiple>
+                {% for user in unique_users %}
+                <option value="{{ user }}">{{ user }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <!-- 1. Dummy-Haltestellen -->
+        <div class="card" data-section-card="1">
+            <h3>1. Fehlerhafte Haltestellen (Dummys) (<span class="section-count">{{ check1|length }}</span> gefunden)</h3>
+            <p>Status: 
+                {% if check1|length > 0 %}<span style="color:#e63900; font-weight:bold;"><span class="section-count">{{ check1|length }}</span> Dummys gefunden!</span>
+                {% else %}<span style="color:#3cb44b; font-weight:bold;">Alles in Ordnung (0 gefunden).</span>{% endif %}
+            </p>
+            {% if check1|length > 0 %}
+            <button class="btn btn-mass fix-btn" onclick="startMassFix('stops')">🔄 Dummys in einem Schwung neu laden & Distanzen reparieren</button>
+            {% endif %}
+            
+            <details style="margin-top: 10px;">
+                <summary>Einzelne Dummy-Haltestellen anzeigen</summary>
+                {% for item in check1 %}
+                <div class="item-row" id="row-stop-{{ item.id }}" data-user="{{ item.username if item.username is defined else '' }}">
+                    <div class="item-info">
+                        <strong>Haltestelle:</strong> {{ item.stopName }} (ID: {{ item.id }})<br>
+                        <small>Land: {{ item.countryCode }} | Lat: {{ item.latitude }} | Lon: {{ item.longitude }}</small>
+                    </div>
+                    <div class="item-actions">
+                        <button class="btn btn-check" onclick="checkAPI('stop', '{{ item.id }}')">API prüfen</button>
+                        <button class="btn btn-fix" id="fix-btn-stop-{{ item.id }}" onclick="fixItem('stop', '{{ item.id }}')">DB korrigieren</button>
+                    </div>
+                </div>
+                <div id="api-res-stop-{{ item.id }}" class="api-result-box"></div>
+                {% endfor %}
+            </details>
+        </div>
+
+        <!-- 2. Verwaiste Haltestellen-Referenzen -->
+        <div class="card" data-section-card="2">
+            <h3>2. Verwaiste Haltestellen-Referenzen (<span class="section-count">{{ check2|length }}</span> gefunden)</h3>
+            <p>Status: 
+                {% if check2|length > 0 %}<span style="color:#e63900; font-weight:bold;"><span class="section-count">{{ check2|length }}</span> verwaiste IDs gefunden!</span>
+                {% else %}<span style="color:#3cb44b; font-weight:bold;">Alles in Ordnung (0 gefunden).</span>{% endif %}
+            </p>
+            {% if check2|length > 0 %}
+            <button class="btn btn-mass fix-btn" onclick="startMassFix('orphaned')">🔄 Fehlende in einem Schwung laden & Distanzen reparieren</button>
+            {% endif %}
+
+            <details style="margin-top: 10px;">
+                <summary>Einzelne verwaiste Referenzen anzeigen</summary>
+                {% for item in check2 %}
+                <div class="item-row" id="row-journey-{{ item.statusId }}" data-user="{{ item.username }}">
+                    <div class="item-info">
+                        <strong>User:</strong> {{ item.username }} | <strong>Status-ID:</strong> {{ item.statusId }}<br>
+                        <small>Fehlende Origin-ID: {{ item.originId }} oder Dest-ID: {{ item.destinationId }}</small>
+                    </div>
+                    <div class="item-actions">
+                        <a href="https://traewelling.de/status/{{ item.statusId }}" target="_blank" class="btn btn-link">In neuem Tab öffnen</a>
+                        <button class="btn btn-check" onclick="checkAPI('journey', '{{ item.statusId }}')">API prüfen</button>
+                        <button class="btn btn-fix" id="fix-btn-journey-{{ item.statusId }}" onclick="fixItem('journey', '{{ item.statusId }}')">DB korrigieren</button>
+                    </div>
+                </div>
+                <div id="api-res-journey-{{ item.statusId }}" class="api-result-box"></div>
+                {% endfor %}
+            </details>
+        </div>
+
+        <!-- Live-Log für Massenreparaturen -->
+        <div id="log-container">
+            <div id="log-output">Warte auf Start...</div>
+        </div>
+        <button id="reload-btn" class="btn" onclick="location.reload()">🔄 Seite neu laden (Werte aktualisieren)</button>
+
+        <!-- 3. Fahrten mit 0-Werten -->
+        <div class="card" data-section-card="3">
+            <details>
+                <summary>3. Auffällige Fahrten (0 Meter Distanz oder <=0 Minuten) (<span class="section-count">{{ check3|length }}</span> gefunden)</summary>
+                {% for item in check3 %}
+                <div class="item-row" id="row-journey-{{ item.statusId }}" data-user="{{ item.username }}">
+                    <div class="item-info">
+                        <strong>User:</strong> {{ item.username }} | <strong>Linie:</strong> {{ item.lineName }}<br>
+                        <small>Distanz: {{ item.distance }}m, Dauer: {{ item.durationReal }}min</small>
+                    </div>
+                    <div class="item-actions">
+                        <a href="https://traewelling.de/status/{{ item.statusId }}" target="_blank" class="btn btn-link">In neuem Tab öffnen</a>
+                        <button class="btn btn-check" onclick="checkAPI('journey', '{{ item.statusId }}')">API prüfen</button>
+                        <button class="btn btn-fix" id="fix-btn-journey-{{ item.statusId }}" onclick="fixItem('journey', '{{ item.statusId }}')">DB korrigieren</button>
+                    </div>
+                </div>
+                <div id="api-res-journey-{{ item.statusId }}" class="api-result-box"></div>
+                {% else %}
+                <p>Keine auffälligen Fahrten gefunden.</p>
+                {% endfor %}
+            </details>
+        </div>
+
+        <!-- 4. Unplausible Geschwindigkeit -->
+        <div class="card" data-section-card="4">
+            <details>
+                <summary>4. Unplausible Geschwindigkeiten je Fahrzeugtyp (<span class="section-count">{{ check4|length }}</span> gefunden)</summary>
+                {% for item in check4 %}
+                <div class="item-row" id="row-journey-{{ item.statusId }}" data-user="{{ item.username }}">
+                    <div class="item-info">
+                        <strong>User:</strong> {{ item.username }} | <strong>Linie:</strong> {{ item.lineName }} ({{ item.category }})<br>
+                        <small>Berechnete Geschw.: {{ item.speed_kmh }} km/h</small>
+                    </div>
+                    <div class="item-actions">
+                        <a href="https://traewelling.de/status/{{ item.statusId }}" target="_blank" class="btn btn-link">In neuem Tab öffnen</a>
+                        <button class="btn btn-check" onclick="checkAPI('journey', '{{ item.statusId }}')">API prüfen</button>
+                        <button class="btn btn-fix" id="fix-btn-journey-{{ item.statusId }}" onclick="fixItem('journey', '{{ item.statusId }}')">DB korrigieren</button>
+                    </div>
+                </div>
+                <div id="api-res-journey-{{ item.statusId }}" class="api-result-box"></div>
+                {% else %}
+                <p>Keine unplausiblen Geschwindigkeiten gefunden.</p>
+                {% endfor %}
+            </details>
+        </div>
+
+        <!-- 5. Zeitreisen -->
+        <div class="card" data-section-card="5">
+            <details>
+                <summary>5. Zeitreisen (Ankunft liegt vor Abfahrt) (<span class="section-count">{{ check5|length }}</span> gefunden)</summary>
+                {% for item in check5 %}
+                <div class="item-row" id="row-journey-{{ item.statusId }}" data-user="{{ item.username }}">
+                    <div class="item-info">
+                        <strong>User:</strong> {{ item.username }} | <strong>Linie:</strong> {{ item.lineName }}<br>
+                        <small>Abfahrt: {{ item.departureFinal }} | Ankunft: {{ item.arrivalFinal }}</small>
+                    </div>
+                    <div class="item-actions">
+                        <a href="https://traewelling.de/status/{{ item.statusId }}" target="_blank" class="btn btn-link">In neuem Tab öffnen</a>
+                        <button class="btn btn-check" onclick="checkAPI('journey', '{{ item.statusId }}')">API prüfen</button>
+                        <button class="btn btn-fix" id="fix-btn-journey-{{ item.statusId }}" onclick="fixItem('journey', '{{ item.statusId }}')">DB korrigieren</button>
+                    </div>
+                </div>
+                <div id="api-res-journey-{{ item.statusId }}" class="api-result-box"></div>
+                {% else %}
+                <p>Keine Zeitreisen gefunden.</p>
+                {% endfor %}
+            </details>
+        </div>
+
+        <!-- 6. Extreme Verspätungen -->
+        <div class="card" data-section-card="6">
+            <details>
+                <summary>6. Extreme Verspätungen (>20h Abweichung) (<span class="section-count">{{ check6|length }}</span> gefunden)</summary>
+                {% for item in check6 %}
+                <div class="item-row" id="row-journey-{{ item.statusId }}" data-user="{{ item.username }}">
+                    <div class="item-info">
+                        <strong>User:</strong> {{ item.username }} | <strong>Linie:</strong> {{ item.lineName }}<br>
+                        <small>Abfahrtsverspätung: {{ item.departureDelay }}min | Ankunftsverspätung: {{ item.arrivalDelay }}min</small>
+                    </div>
+                    <div class="item-actions">
+                        <a href="https://traewelling.de/status/{{ item.statusId }}" target="_blank" class="btn btn-link">In neuem Tab öffnen</a>
+                        <button class="btn btn-check" onclick="checkAPI('journey', '{{ item.statusId }}')">API prüfen</button>
+                        <button class="btn btn-fix" id="fix-btn-journey-{{ item.statusId }}" onclick="fixItem('journey', '{{ item.statusId }}')">DB korrigieren</button>
+                    </div>
+                </div>
+                <div id="api-res-journey-{{ item.statusId }}" class="api-result-box"></div>
+                {% else %}
+                <p>Keine extremen Verspätungen gefunden.</p>
+                {% endfor %}
+            </details>
+        </div>
+
+        <!-- 7. Ungültige Geo-Koordinaten -->
+        <div class="card" data-section-card="7">
+            <details>
+                <summary>7. Ungültige Geo-Koordinaten bei Haltestellen (<span class="section-count">{{ check7|length }}</span> gefunden)</summary>
+                {% for item in check7 %}
+                <div class="item-row" id="row-stop-{{ item.id }}">
+                    <div class="item-info">
+                        <strong>Haltestelle:</strong> {{ item.stopName }} (ID: {{ item.id }})<br>
+                        <small>Lat: {{ item.latitude }} | Lon: {{ item.longitude }}</small>
+                    </div>
+                    <div class="item-actions">
+                        <button class="btn btn-check" onclick="checkAPI('stop', '{{ item.id }}')">API prüfen</button>
+                        <button class="btn btn-fix" id="fix-btn-stop-{{ item.id }}" onclick="fixItem('stop', '{{ item.id }}')">DB korrigieren</button>
+                    </div>
+                </div>
+                <div id="api-res-stop-{{ item.id }}" class="api-result-box"></div>
+                {% else %}
+                <p>Keine ungültigen Koordinaten gefunden.</p>
+                {% endfor %}
+            </details>
+        </div>
+
+        <!-- 8. Inkonsistente User-Daten -->
+        <div class="card" data-section-card="8">
+            <details>
+                <summary>8. Inkonsistente User-Daten in Fahrten (<span class="section-count">{{ check8|length }}</span> gefunden)</summary>
+                {% for item in check8 %}
+                <div class="item-row" data-user="{{ item.username }}">
+                    <div class="item-info">
+                        <strong>User ID:</strong> {{ item.userId }} | <strong>Username:</strong> {{ item.username }}<br>
+                        <small>Dieser User existiert in den Fahrten, aber nicht in der Users-Tabelle.</small>
+                    </div>
+                </div>
+                {% else %}
+                <p>Keine inkonsistenten User gefunden.</p>
+                {% endfor %}
+            </details>
+        </div>
+
+        <!-- 9. Polylines -->
+        <div class="card" data-section-card="9">
+            <details>
+                <summary>9. Streckengrafiken (Polylines) (<span class="section-count">{{ check9_empty|length + check9_orphaned|length }}</span> fehlerhaft)</summary>
+                
+                <h4>Leere Polylines</h4>
+                {% for item in check9_empty %}
+                <div class="item-row" id="row-polyline-{{ item.statusId }}">
+                    <div class="item-info">
+                        <strong>Status-ID:</strong> {{ item.statusId }}
+                    </div>
+                    <div class="item-actions">
+                        <a href="https://traewelling.de/status/{{ item.statusId }}" target="_blank" class="btn btn-link">Status ansehen</a>
+                        <button class="btn btn-fix" style="display:inline-block;" onclick="fixItem('polyline', '{{ item.statusId }}')">DB korrigieren (Löschen)</button>
+                    </div>
+                </div>
+                {% else %}
+                <p>Keine leeren Polylines gefunden.</p>
+                {% endfor %}
+
+                <h4>Verwaiste Polylines (Fahrt existiert nicht mehr)</h4>
+                {% for item in check9_orphaned %}
+                <div class="item-row" id="row-polyline-{{ item.statusId }}">
+                    <div class="item-info">
+                        <strong>Status-ID:</strong> {{ item.statusId }}
+                    </div>
+                    <div class="item-actions">
+                        <button class="btn btn-fix" style="display:inline-block;" onclick="fixItem('polyline', '{{ item.statusId }}')">DB korrigieren (Löschen)</button>
+                    </div>
+                </div>
+                {% else %}
+                <p>Keine verwaisten Polylines gefunden.</p>
+                {% endfor %}
+
+            </details>
+        </div>
+
+    <!-- Neuer Bereich: Einzelnen Status neu laden -->
+<div class="card mb-4">
+    <div class="card-header bg-primary text-white">
+        <strong>DB korrigieren / Status neu laden</strong>
+    </div>
+    <div class="card-body">
+        <form id="reloadStatusForm" class="row g-3">
+            <div class="col-auto">
+                <input type="text" class="form-control" id="statusIdInput" name="status_id" placeholder="Statusnummer (z. B. 123456)" required>
+            </div>
+            <div class="col-auto">
+                <button type="submit" class="btn btn-success mb-3">DB korrigieren</button>
+            </div>
+        </form>
+        <div id="reloadStatusResult" class="mt-2"></div>
+    </div>
+</div>
+
+<script>
+document.getElementById('reloadStatusForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const statusId = document.getElementById('statusIdInput').value;
+    const resultDiv = document.getElementById('reloadStatusResult');
+    resultDiv.innerHTML = '<div class="spinner-border spinner-border-sm text-primary" role="status"></div> Korrigiere Status und vergleiche alle Werte...';
+
+    fetch('/debug/reload_status', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'status_id=' + encodeURIComponent(statusId)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            let html = '<div class="alert alert-success"><strong>Erfolg!</strong> ' + data.message + '<hr>';
+            if (data.differences && Object.keys(data.differences).length > 0) {
+                html += '<strong>Alle veränderten Werte (Vorher ➔ Neu):</strong>';
+                html += '<div style="max-height: 250px; overflow-y: auto; background: #fff; padding: 10px; border: 1px solid #ccc; border-radius: 4px; margin-top: 5px;">';
+                html += '<ul class="mb-0 ps-3">';
+                for (const [key, val] of Object.entries(data.differences)) {
+                    html += `<li><code>${key}</code>: <span class="text-danger text-decoration-line-through">${val.old !== null ? val.old : 'NULL'}</span> ➔ <span class="text-success fw-bold">${val.new !== null ? val.new : 'NULL'}</span></li>`;
+                }
+                html += '</ul></div>';
+            } else {
+                html += '<small class="text-muted">Es wurden absolut keine Abweichungen festgestellt (Daten waren bereits komplett aktuell).</small>';
+            }
+            html += '</div>';
+            resultDiv.innerHTML = html;
+        } else {
+            resultDiv.innerHTML = '<div class="alert alert-danger py-1 mb-0">' + (data.message || 'Ein Fehler ist aufgetreten.') + '</div>';
+        }
+    })
+    .catch(error => {
+        resultDiv.innerHTML = '<div class="alert alert-danger py-1 mb-0">Verbindungsfehler: ' + error + '</div>';
+    });
+});
+</script>
+
+        <a href="{{ url_for('dashboard') }}" class="btn-back">⬅️ Zurück zum Dashboard</a>
+    </div>
+
+    <script>
+        // Initialisierung des Choices.js User Filters und Live-Zähler-Aktualisierung
+        document.addEventListener('DOMContentLoaded', function() {
+            const userSelect = document.getElementById('userFilter');
+            if(userSelect) {
+                new Choices(userSelect, {
+                    removeItemButton: true,
+                    placeholderValue: 'Alle User anzeigen (Klicken zum Filtern)',
+                    searchPlaceholderValue: 'Suchen...'
+                });
+
+                userSelect.addEventListener('change', function() {
+                    let selectedUsers = Array.from(this.selectedOptions).map(opt => opt.value);
+                    
+                    // Gehe jede Sektion (1 bis 9) einzeln durch und zähle die sichtbaren Elemente
+                    document.querySelectorAll('.card[data-section-card]').forEach(card => {
+                        let rows = card.querySelectorAll('.item-row');
+                        let visibleCount = 0;
+
+                        rows.forEach(row => {
+                            let rowUser = row.dataset.user;
+                            // Wenn kein User an der Zeile hängt (z.B. Haltestellen ohne User-Zuordnung) 
+                            // oder der User im Filter enthalten ist (oder keine Filter gewählt sind):
+                            if (selectedUsers.length === 0 || !rowUser || selectedUsers.includes(rowUser)) {
+                                row.style.display = 'flex';
+                                visibleCount++;
+                            } else {
+                                row.style.display = 'none';
+                            }
+                        });
+
+                        // Aktualisiere alle Zähler-Anzeigen in dieser Sektion
+                        card.querySelectorAll('.section-count').forEach(span => {
+                            span.innerText = visibleCount;
+                        });
+                    });
+                });
+            }
+        });
+
+        function startMassFix(fixType) {
+            document.getElementById('log-container').style.display = 'block';
+            document.getElementById('log-output').innerText = '🚀 Initialisiere automatische Reparatur...';
+
+            document.querySelectorAll('.fix-btn').forEach(b => b.disabled = true);
+
+            let formData = new FormData();
+            formData.append('fix_type', fixType);
+
+            fetch('/debug/run_fix', { method: 'POST', body: formData })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+                pollStatus(data.task_id);
+            });
+        }
+
+        function pollStatus(taskId) {
+            let interval = setInterval(() => {
+                fetch('/task_status/' + taskId)
+                .then(res => res.json())
+                .then(data => {
+                    let logBox = document.getElementById('log-output');
+                    logBox.innerText = data.logs.join('\n');
+
+                    let container = document.getElementById('log-container');
+                    container.scrollTop = container.scrollHeight;
+
+                    if (data.status === 'completed' || data.status === 'error') {
+                        clearInterval(interval);
+                        document.getElementById('reload-btn').style.display = 'inline-block';
+                    }
+                });
+            }, 1000);
+        }
+
+        function checkAPI(type, id) {
+            let resBox = document.getElementById('api-res-' + type + '-' + id);
+            resBox.style.display = 'block';
+            resBox.innerHTML = '🔄 Lade Daten aus der Träwelling-API... und vergleiche mit Datenbank';
+
+            fetch('/debug/api_check/' + type + '/' + id, { method: 'POST' })
+            .then(res => res.json())
+            .then(data => {
+                if(data.success) {
+                    let fixBtn = document.getElementById('fix-btn-' + type + '-' + id);
+                    
+                    let diffHTML = '<span class="diff-reason">';
+                    if (data.diff_reasons && data.diff_reasons.length > 0) {
+                        diffHTML += data.diff_reasons.join('<br>');
+                    }
+                    diffHTML += '</span>';
+
+                    let apiDataStr = data.api_data ? JSON.stringify(data.api_data, null, 2) : "Keine Daten (404)";
+                    resBox.innerHTML = diffHTML + apiDataStr;
+
+                    if(fixBtn) {
+                        if(data.differs === true) {
+                            fixBtn.style.display = 'inline-block';
+                        } else {
+                            fixBtn.style.display = 'none';
+                        }
+                    }
+                } else {
+                    resBox.innerHTML = '<span style="color: #ff4444;">❌ <strong>Fehler:</strong> ' + data.message + '</span>';
+                }
+            })
+            .catch(err => {
+                resBox.innerHTML = '<span style="color: #ff4444;">❌ <strong>Netzwerkfehler:</strong> ' + err + '</span>';
+            });
+        }
+
+        function fixItem(type, id) {
+            if(!confirm("Möchtest du diesen Eintrag wirklich aus der Datenbank löschen, um ein Neuladen zu erzwingen?")) return;
+            
+            fetch('/debug/fix_item/' + type + '/' + id, { method: 'POST' })
+            .then(res => res.json())
+            .then(data => {
+                if(data.success) {
+                    alert(data.message);
+                    let row = document.getElementById('row-' + type + '-' + id);
+                    if(row) row.style.display = 'none';
+                    let resBox = document.getElementById('api-res-' + type + '-' + id);
+                    if(resBox) resBox.style.display = 'none';
+                } else {
+                    alert("Fehler: " + data.message);
+                }
+            });
+        }
+
+        // ==========================================
+        // QUEUE POLLING & MANAGEMENT
+        // ==========================================
+        function escapeHtml(text) {
+            if (!text) return "";
+            return String(text)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        function renderQueue(tasks) {
+            const listEl = document.getElementById("queue-list");
+            const badgeEl = document.getElementById("queue-count-badge");
+            if (!listEl) return;
+
+            const activeTasks = tasks.filter(t => t.status === "running" || t.status === "waiting");
+            if (badgeEl) {
+                badgeEl.textContent = activeTasks.length + " aktiv / wartend";
+                badgeEl.style.backgroundColor = activeTasks.length > 0 ? "#ffc107" : "#e0e0e0";
+                badgeEl.style.color = activeTasks.length > 0 ? "#000" : "#555";
+            }
+
+            if (!tasks || tasks.length === 0) {
+                listEl.innerHTML = "<p style='color: #888; margin: 5px 0; font-size: 13px;'>Aktuell keine Prozesse vorhanden.</p>";
+                return;
+            }
+
+            let html = "";
+            tasks.forEach(t => {
+                let statusBadge = "";
+                if (t.status === "running") {
+                    statusBadge = "<span style='background: #004488; color: white; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold;'>⚡ In Bearbeitung</span>";
+                } else if (t.status === "waiting") {
+                    statusBadge = `<span style='background: #ff9800; color: white; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold;'>⏳ Warteschlange (Platz ${t.queue_pos || 1})</span>`;
+                } else if (t.status === "completed") {
+                    statusBadge = "<span style='background: #3cb44b; color: white; padding: 3px 8px; border-radius: 4px; font-size: 11px;'>✅ Fertig</span>";
+                } else if (t.status === "stopped") {
+                    statusBadge = "<span style='background: #757575; color: white; padding: 3px 8px; border-radius: 4px; font-size: 11px;'>🛑 Abgebrochen</span>";
+                } else {
+                    statusBadge = "<span style='background: #e63900; color: white; padding: 3px 8px; border-radius: 4px; font-size: 11px;'>❌ Fehler</span>";
+                }
+
+                let canStop = (t.status === "running" || t.status === "waiting");
+                let stopBtn = canStop ? `<button class="btn" style="background-color: #dc3545; padding: 4px 10px; font-size: 12px; margin-left: 10px;" onclick="stopQueueTask('${t.task_id}')">🛑 Anfrage abbrechen</button>` : "";
+
+                let targetStr = t.target_users && t.target_users.length ? `[${t.target_users.join(", ")}]` : "";
+
+                html += `
+                <div style="border: 1px solid #e0e0e0; background: #fafafa; border-radius: 6px; padding: 10px 14px; font-size: 13px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <strong>👤 ${escapeHtml(t.creator)}</strong>
+                            <span style="background: #eef5fa; color: #004488; font-weight: bold; padding: 2px 6px; border-radius: 4px; font-size: 12px;">${escapeHtml(t.type)}</span>
+                            <small style="color: #666;">${escapeHtml(targetStr)}</small>
+                            <span style="color: #888; font-size: 11px;">(${escapeHtml(t.created_at)})</span>
+                        </div>
+                        <div style="display: flex; align-items: center;">
+                            ${statusBadge}
+                            ${stopBtn}
+                        </div>
+                    </div>
+                    <div style="margin-top: 6px; font-family: monospace; font-size: 12px; color: #333; background: #fff; padding: 6px 10px; border-radius: 4px; border: 1px solid #eee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(t.latest_log)}">
+                        ${escapeHtml(t.latest_log || "Initialisiere Prozess...")}
+                    </div>
+                </div>`;
+            });
+
+            listEl.innerHTML = html;
+        }
+
+        function fetchQueue() {
+            fetch("/debug/queue")
+            .then(res => res.json())
+            .then(data => {
+                if (data && data.tasks) {
+                    renderQueue(data.tasks);
+                }
+            })
+            .catch(err => console.error("Fehler bei fetchQueue:", err));
+        }
+
+        function stopQueueTask(taskId) {
+            if (!confirm("Möchtest du diese Anfrage wirklich abbrechen?")) return;
+            fetch("/stop_task/" + taskId, { method: "POST" })
+            .then(res => res.json())
+            .then(() => fetchQueue());
+        }
+
+        setInterval(fetchQueue, 1500);
+        fetchQueue();
+    </script>
+</body>
+</html>

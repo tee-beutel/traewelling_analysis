@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Träwelling Auswertung v9 - Login</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f4f7f6; color: #333; margin: 0; padding: 40px 15px; }
+        .card { background: white; max-width: 540px; margin: 0 auto; padding: 35px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); }
+        h1 { margin-top: 0; margin-bottom: 8px; color: #004488; font-size: 26px; text-align: center; }
+        .subtitle { color: #666; font-size: 14px; line-height: 1.5; text-align: center; margin-bottom: 25px; }
+        
+        .alert { background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; padding: 12px 16px; border-radius: 6px; font-size: 14px; margin-bottom: 20px; text-align: left; }
+        
+        /* Tab Navigation */
+        .tab-nav { display: flex; border-bottom: 2px solid #e0e0e0; margin-bottom: 25px; }
+        .tab-btn { flex: 1; padding: 12px 10px; border: none; background: none; font-size: 15px; font-weight: bold; color: #777; cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -2px; transition: all 0.2s; }
+        .tab-btn.active { color: #004488; border-bottom-color: #004488; }
+        .tab-content { display: none; text-align: left; }
+        .tab-content.active { display: block; }
+
+        .btn { display: inline-block; width: 100%; box-sizing: border-box; padding: 13px 20px; font-size: 15px; font-weight: bold; color: white; text-align: center; text-decoration: none; border-radius: 6px; border: none; cursor: pointer; transition: background 0.2s; }
+        .btn-primary { background-color: #004488; }
+        .btn-primary:hover { background-color: #003366; }
+        .btn-oauth { background-color: #e63900; }
+        .btn-oauth:hover { background-color: #cc3300; }
+        .btn-outline { background: white; color: #004488; border: 1px solid #004488; margin-top: 10px; }
+        .btn-outline:hover { background: #f0f5fa; }
+        
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; font-size: 13px; font-weight: bold; margin-bottom: 5px; color: #444; }
+        .form-control { width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 14px; border: 1px solid #ccc; border-radius: 6px; transition: border-color 0.2s; }
+        .form-control:focus { outline: none; border-color: #004488; }
+        
+        .info-box { background: #eef5fa; border: 1px solid #cce0f0; border-radius: 6px; padding: 12px 15px; font-size: 13px; margin-bottom: 15px; line-height: 1.4; }
+        .toggle-link { display: inline-block; font-size: 13px; color: #004488; text-decoration: underline; cursor: pointer; margin-top: 10px; text-align: center; width: 100%; }
+        .toggle-link:hover { color: #002244; }
+        .hint { font-size: 12px; color: #777; margin-top: 5px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🚂 Träwelling Auswertung v9</h1>
+        <p class="subtitle">Excel-Fahrtenbücher, interaktive Timelines, Strecken- &amp; Haltestellenkarten, Ganglinien und Verspätungs-Plots.</p>
+
+        {% if error %}
+        <div class="alert">
+            ⚠️ <strong>Hinweis:</strong> {{ error }}
+        </div>
+        {% endif %}
+
+        <div class="tab-nav">
+            <button class="tab-btn active" id="tab-token-btn" onclick="switchTab('token')">🔑 API-Token</button>
+            <button class="tab-btn" id="tab-oauth-btn" onclick="switchTab('oauth')">🌐 OAuth-Login</button>
+        </div>
+
+        <!-- TAB 1: API-TOKEN -->
+        <div id="tab-token" class="tab-content active">
+            {% if has_token %}
+            <div id="token-stored-view">
+                <div class="info-box">
+                    <strong>Hinterlegter API-Token in .env:</strong><br>
+                    <code>{{ token_preview }}</code>
+                </div>
+                <form action="/login_token" method="POST">
+                    <button type="submit" class="btn btn-primary">🚀 Mit hinterlegtem API-Token einloggen</button>
+                </form>
+                <a class="toggle-link" onclick="toggleTokenEdit()">Anderen API-Token eingeben</a>
+            </div>
+
+            <div id="token-edit-view" style="display: none;">
+                <form action="/login_token" method="POST">
+                    <div class="form-group">
+                        <label for="api_token">Neuen API-Token eingeben:</label>
+                        <textarea class="form-control" name="api_token" id="api_token" rows="3" placeholder="eyJ0eXAi..."></textarea>
+                        <div class="hint">Den API-Token findest du bei Träwelling unter Einstellungen ➔ Entwickler ➔ API-Tokens.</div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">💾 In .env speichern &amp; Einloggen</button>
+                </form>
+                <a class="toggle-link" onclick="toggleTokenEdit()">Abbrechen (Gespeicherten Token nutzen)</a>
+            </div>
+            {% else %}
+            <div>
+                <p style="font-size: 14px; margin-top: 0; color: #555;">Es ist noch kein API-Token in der <code>.env</code> hinterlegt. Bitte gib deinen persönlichen Träwelling API-Token ein:</p>
+                <form action="/login_token" method="POST">
+                    <div class="form-group">
+                        <label for="api_token_new">Träwelling API-Token (Bearer Token):</label>
+                        <textarea class="form-control" name="api_token" id="api_token_new" rows="3" placeholder="eyJ0eXAi..." required></textarea>
+                        <div class="hint">Erstelle einen API-Token unter Träwelling ➔ Einstellungen ➔ Entwickler. Er wird sicher in deiner lokalen <code>.env</code> gespeichert.</div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">💾 In .env speichern &amp; Einloggen</button>
+                </form>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- TAB 2: OAUTH -->
+        <div id="tab-oauth" class="tab-content">
+            {% if has_oauth %}
+            <div id="oauth-stored-view">
+                <div class="info-box">
+                    <strong>OAuth-Konfiguration in .env:</strong><br>
+                    Client-ID: <code>{{ client_id }}</code><br>
+                    Redirect-URI: <code>{{ redirect_uri }}</code>
+                </div>
+                <a href="/login" class="btn btn-oauth">Mit Träwelling einloggen (OAuth)</a>
+                <a class="toggle-link" onclick="toggleOAuthEdit()">OAuth-Zugangsdaten ändern</a>
+            </div>
+
+            <div id="oauth-edit-view" style="display: none;">
+                <form action="/setup_oauth" method="POST">
+                    <div class="form-group">
+                        <label for="client_id_edit">OAuth Client-ID:</label>
+                        <input type="text" class="form-control" name="client_id" id="client_id_edit" value="{{ client_id }}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="client_secret_edit">OAuth Client-Secret:</label>
+                        <input type="password" class="form-control" name="client_secret" id="client_secret_edit" placeholder="••••••••••••••••" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="redirect_uri_edit">Redirect-URI:</label>
+                        <input type="text" class="form-control" name="redirect_uri" id="redirect_uri_edit" value="{{ redirect_uri }}" required>
+                    </div>
+                    <button type="submit" class="btn btn-oauth">💾 In .env speichern &amp; zu Träwelling</button>
+                </form>
+                <a class="toggle-link" onclick="toggleOAuthEdit()">Abbrechen</a>
+            </div>
+            {% else %}
+            <div>
+                <p style="font-size: 14px; margin-top: 0; color: #555;">Für den OAuth-Login müssen Client-ID, Secret und Redirect-URI hinterlegt werden:</p>
+                <form action="/setup_oauth" method="POST">
+                    <div class="form-group">
+                        <label for="client_id_new">OAuth Client-ID:</label>
+                        <input type="text" class="form-control" name="client_id" id="client_id_new" placeholder="z. B. 296" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="client_secret_new">OAuth Client-Secret:</label>
+                        <input type="password" class="form-control" name="client_secret" id="client_secret_new" placeholder="Secret aus Träwelling-OAuth-App" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="redirect_uri_new">Redirect-URI:</label>
+                        <input type="text" class="form-control" name="redirect_uri" id="redirect_uri_new" placeholder="https://100.105.194.42:8080/callback" required>
+                    </div>
+                    <button type="submit" class="btn btn-oauth">💾 In .env speichern &amp; zu Träwelling</button>
+                </form>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            if (tab === 'token') {
+                document.getElementById('tab-token-btn').classList.add('active');
+                document.getElementById('tab-token').classList.add('active');
+            } else {
+                document.getElementById('tab-oauth-btn').classList.add('active');
+                document.getElementById('tab-oauth').classList.add('active');
+            }
+        }
+
+        function toggleTokenEdit() {
+            var stored = document.getElementById('token-stored-view');
+            var edit = document.getElementById('token-edit-view');
+            if (stored.style.display === 'none') {
+                stored.style.display = 'block';
+                edit.style.display = 'none';
+            } else {
+                stored.style.display = 'none';
+                edit.style.display = 'block';
+            }
+        }
+
+        function toggleOAuthEdit() {
+            var stored = document.getElementById('oauth-stored-view');
+            var edit = document.getElementById('oauth-edit-view');
+            if (stored.style.display === 'none') {
+                stored.style.display = 'block';
+                edit.style.display = 'none';
+            } else {
+                stored.style.display = 'none';
+                edit.style.display = 'block';
+            }
+        }
+    </script>
+</body>
+</html>

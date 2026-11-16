@@ -1,0 +1,29 @@
+# Sensible Zugangsdaten & Tokens
+.env
+.env.*
+.api_token.txt
+*.api_token.txt
+
+# SQLite-Datenbanken & temporäre DB-Dateien
+traewelling.db
+traewelling.db-journal
+traewelling.db-wal
+traewelling.db-shm
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Generierte Exporte & Auswertungen
+finished_exports/
+timeline.html
+
+# Python & Entwicklungsumgebungen
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.idea/
+.vscode/
