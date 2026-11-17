@@ -1,0 +1,2854 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interaktive Auswertung - {{ username }} (v10)</title>
+
+    <!-- TomSelect für Multi-User Auswahl -->
+    <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.default.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+
+    <!-- Chart.js für interaktive Live-Diagramme -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+    <style>
+        :root {
+            --primary: #004488;
+            --primary-dark: #003366;
+            --primary-light: #eef5fa;
+            --accent: #e63900;
+            --success: #28a745;
+            --warning: #ff9800;
+            --danger: #dc3545;
+            --bg: #f4f7f6;
+            --card-bg: #ffffff;
+            --border: #dce3e8;
+            --text: #2c3e50;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 18px;
+        }
+
+        .app-container { max-width: 1550px; margin: 0 auto; }
+
+        /* Top Header */
+        .top-bar {
+            display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;
+            background: var(--card-bg); padding: 15px 22px; border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 16px; border: 1px solid var(--border);
+        }
+        .top-bar h1 { margin: 0; font-size: 22px; color: var(--primary); display: flex; align-items: center; gap: 10px; }
+        .top-nav { display: flex; gap: 8px; flex-wrap: wrap; }
+
+        /* Buttons */
+        .btn {
+            padding: 8px 14px; border-radius: 6px; border: none; font-size: 13.5px; font-weight: 600;
+            cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+            transition: all 0.15s; color: white; background-color: var(--primary);
+        }
+        .btn:hover { background-color: var(--primary-dark); }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-sm { padding: 5px 10px; font-size: 12px; border-radius: 5px; }
+        .btn-outline { background: white; color: var(--primary); border: 1px solid var(--primary); }
+        .btn-outline:hover { background: var(--primary-light); }
+        .btn-accent { background: var(--accent); }
+        .btn-accent:hover { background: #cc3300; }
+        .btn-success { background: var(--success); }
+        .btn-success:hover { background: #218838; }
+        .btn-secondary { background: #6c757d; }
+        .btn-secondary:hover { background: #5a6268; }
+        .btn-danger { background: var(--danger); }
+
+        /* Control Panel (Users, Dates, Mode) */
+        .control-panel {
+            background: var(--card-bg); padding: 16px 20px; border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 14px; border: 1px solid var(--border);
+            display: grid; grid-template-columns: 220px 1.5fr 1.2fr auto; gap: 16px; align-items: end;
+        }
+        @media (max-width: 1150px) { .control-panel { grid-template-columns: 1fr 1fr; } }
+        @media (max-width: 680px) { .control-panel { grid-template-columns: 1fr; } }
+
+        .control-group label { display: block; font-size: 12px; font-weight: 700; color: #555; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.4px; }
+        .form-control {
+            width: 100%; padding: 8px 10px; font-size: 13.5px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff;
+        }
+        .form-control:focus { outline: none; border-color: var(--primary); }
+
+        .mode-switch { display: flex; border: 1px solid var(--primary); border-radius: 6px; overflow: hidden; }
+        .mode-switch button {
+            flex: 1; padding: 8px 10px; border: none; background: white; color: var(--primary);
+            font-weight: 700; font-size: 13px; cursor: pointer; transition: all 0.15s;
+        }
+        .mode-switch button.active { background: var(--primary); color: white; }
+
+        .date-quick-pills { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
+        .date-pill {
+            font-size: 11px; padding: 2px 7px; border-radius: 4px; background: #e9ecef; color: #444;
+            cursor: pointer; border: none; font-weight: 600;
+        }
+        .date-pill:hover { background: #d0d7de; color: #000; }
+
+        /* KPI Ribbon */
+        .kpi-ribbon {
+            display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 14px;
+        }
+        @media (max-width: 1100px) { .kpi-ribbon { grid-template-columns: repeat(3, 1fr); } }
+        @media (max-width: 600px) { .kpi-ribbon { grid-template-columns: repeat(2, 1fr); } }
+
+        .kpi-card {
+            background: var(--card-bg); border: 1px solid var(--border); border-left: 4px solid var(--primary);
+            border-radius: 8px; padding: 10px 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+            cursor: pointer; transition: transform 0.12s, box-shadow 0.12s;
+        }
+        .kpi-card:hover { transform: translateY(-2px); box-shadow: 0 4px 10px rgba(0,68,136,0.12); border-left-color: var(--accent); }
+        .kpi-label { font-size: 11.5px; color: #666; font-weight: 600; text-transform: uppercase; }
+        .kpi-val { font-size: 20px; font-weight: 800; color: var(--primary); margin-top: 2px; }
+        .kpi-sub { font-size: 11px; color: #888; margin-top: 2px; }
+
+        /* Drill-Down Breadcrumb & Active Filter Bar */
+        .drill-bar {
+            background: #fff; border: 1px solid #b8d4ec; border-left: 5px solid var(--accent);
+            border-radius: 8px; padding: 10px 16px; margin-bottom: 16px;
+            display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;
+            box-shadow: 0 2px 6px rgba(0,68,136,0.06);
+        }
+        .drill-path { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; }
+        .filter-chip {
+            display: inline-flex; align-items: center; gap: 6px; background: var(--primary-light);
+            color: var(--primary-dark); border: 1px solid #90caf9; padding: 4px 10px; border-radius: 20px;
+            font-weight: 600; font-size: 12.5px;
+        }
+        .filter-chip button {
+            background: none; border: none; color: var(--danger); font-weight: bold; cursor: pointer;
+            padding: 0 2px; font-size: 14px; line-height: 1;
+        }
+        .drill-arrow { color: #888; font-weight: bold; }
+
+        /* Main Module Tabs */
+        .module-tabs {
+            display: flex; gap: 8px; margin-bottom: 16px; overflow-x: auto; padding-bottom: 4px;
+        }
+        .module-tab {
+            padding: 11px 18px; background: white; border: 2px solid var(--border); border-radius: 8px;
+            font-size: 14px; font-weight: 700; color: #555; cursor: pointer; white-space: nowrap;
+            display: flex; align-items: center; gap: 8px; transition: all 0.15s;
+        }
+        .module-tab:hover { border-color: #b8d4ec; color: var(--primary); }
+        .module-tab.active {
+            border-color: var(--primary); background: var(--primary); color: white;
+            box-shadow: 0 3px 10px rgba(0,68,136,0.2);
+        }
+
+        /* Explorer Layout (Sidebar + Main Table) */
+        .explorer-grid {
+            display: grid; grid-template-columns: 290px 1fr; gap: 18px; align-items: start;
+        }
+        @media (max-width: 1024px) { .explorer-grid { grid-template-columns: 1fr; } }
+
+        .sidebar-card {
+            background: var(--card-bg); border-radius: 10px; border: 1px solid var(--border);
+            padding: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); position: sticky; top: 15px;
+            max-height: calc(100vh - 30px); overflow-y: auto;
+        }
+        .sidebar-section-title {
+            font-size: 11.5px; font-weight: 800; text-transform: uppercase; color: #777;
+            margin: 12px 0 6px 0; padding-bottom: 4px; border-bottom: 1px solid #eee;
+        }
+        .sidebar-section-title:first-child { margin-top: 0; }
+
+        .sheet-nav-btn {
+            width: 100%; text-align: left; padding: 8px 10px; border-radius: 6px; border: 1px solid transparent;
+            background: transparent; font-size: 13px; font-weight: 600; color: #333; cursor: pointer;
+            display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px;
+            transition: all 0.12s;
+        }
+        .sheet-nav-btn:hover { background: var(--primary-light); color: var(--primary); }
+        .sheet-nav-btn.active { background: var(--primary); color: white; font-weight: 700; }
+        .sheet-nav-btn .badge-mini {
+            font-size: 10px; padding: 1px 6px; border-radius: 4px; background: rgba(0,0,0,0.08);
+        }
+        .sheet-nav-btn.active .badge-mini { background: rgba(255,255,255,0.25); color: white; }
+
+        /* Ad-Hoc Custom Group Builder */
+        .adhoc-box {
+            background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px; margin-bottom: 14px;
+        }
+        .adhoc-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; align-items: end;
+        }
+
+        /* Content Card & Data Table */
+        .content-card {
+            background: var(--card-bg); border-radius: 10px; border: 1px solid var(--border);
+            padding: 18px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); min-width: 0;
+        }
+        .table-toolbar {
+            display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;
+            gap: 10px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 2px solid #eef2f5;
+        }
+        .table-title-area h2 { margin: 0; font-size: 19px; color: var(--primary); display: flex; align-items: center; gap: 8px; }
+        .table-subtitle { font-size: 12px; color: #666; margin-top: 2px; }
+
+        .table-wrapper {
+            width: 100%; overflow-x: auto; max-height: 70vh; overflow-y: auto;
+            border: 1px solid #e2e8f0; border-radius: 8px;
+        }
+        table.interactive-table {
+            width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; background: white;
+        }
+        table.interactive-table thead th {
+            position: sticky; top: 0; background: #004488; color: white; font-weight: 700;
+            padding: 10px 12px; text-align: left; white-space: nowrap; cursor: pointer;
+            user-select: none; z-index: 20; border-right: 1px solid rgba(255,255,255,0.15);
+            border-bottom: 2px solid #003366;
+        }
+        table.interactive-table thead th:hover { background: #003366; }
+        table.interactive-table.no-sticky-header thead th {
+            position: static;
+        }
+        table.interactive-table.no-sticky-header thead th.sticky-col {
+            position: sticky; top: auto;
+        }
+        table.interactive-table tbody tr { border-bottom: 1px solid #edf2f7; transition: background 0.1s; }
+        table.interactive-table tbody tr:nth-child(even) { background: #f8fafc; }
+        table.interactive-table tbody tr:hover { background: #eef5fa; }
+        table.interactive-table td { padding: 8px 12px; white-space: nowrap; border-bottom: 1px solid #edf2f7; border-right: 1px solid #f1f5f9; z-index: 1; }
+
+        /* Flexible Sticky Columns */
+        table.interactive-table th.sticky-col {
+            position: sticky;
+            z-index: 30 !important;
+            background: #003366 !important;
+        }
+        table.interactive-table td.sticky-col {
+            position: sticky;
+            z-index: 10;
+            background: #ffffff;
+        }
+        table.interactive-table tbody tr:nth-child(even) td.sticky-col {
+            background: #f8fafc;
+        }
+        table.interactive-table tbody tr:hover td.sticky-col {
+            background: #eef5fa;
+        }
+        table.interactive-table .sticky-col-last {
+            box-shadow: 3px 0 6px rgba(0, 0, 0, 0.12);
+            border-right: 2px solid #b8c7d9 !important;
+        }
+
+        /* Flexible Pinned Rows */
+        table.interactive-table tr.pinned-row td {
+            position: sticky;
+            z-index: 15;
+            background: #fffbeb !important;
+            border-bottom: 2px solid #90caf9 !important;
+        }
+        table.interactive-table tr.pinned-row:hover td {
+            background: #fef3c7 !important;
+        }
+        table.interactive-table tr.pinned-row td.sticky-col {
+            z-index: 25 !important;
+            background: #fff9db !important;
+        }
+
+        /* Pin Buttons in Table */
+        .th-pin-btn {
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            font-size: 11px;
+            padding: 2px 4px;
+            border-radius: 4px;
+            opacity: 0.55;
+            transition: all 0.15s;
+            line-height: 1;
+            color: inherit;
+        }
+        .th-pin-btn:hover {
+            opacity: 1;
+            background: rgba(255, 255, 255, 0.25);
+            transform: scale(1.15);
+        }
+        .th-pin-btn.active {
+            opacity: 1;
+            background: rgba(255, 255, 255, 0.35);
+            filter: drop-shadow(0 0 2px rgba(255,255,255,0.9));
+        }
+        .row-pin-btn {
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            font-size: 12px;
+            padding: 2px 4px;
+            border-radius: 4px;
+            opacity: 0.35;
+            transition: all 0.15s;
+            line-height: 1;
+        }
+        .row-pin-btn:hover {
+            opacity: 1;
+            background: rgba(0, 68, 136, 0.12);
+            transform: scale(1.15);
+        }
+        .row-pin-btn.active {
+            opacity: 1;
+            filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3));
+            transform: scale(1.1);
+        }
+
+        /* Pin Settings Popover */
+        .pin-menu-popover {
+            position: fixed;
+            z-index: 3001;
+            background: white;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+            width: 360px;
+            max-width: 95vw;
+            padding: 12px 14px;
+            font-size: 13px;
+            text-align: left;
+            overflow-y: auto;
+        }
+
+        /* Interactive Drill-Down Cells */
+        .group-cell-btn {
+            display: inline-flex; align-items: center; gap: 5px; font-weight: 700; color: var(--primary);
+            background: rgba(0, 68, 136, 0.07); border: 1px solid rgba(0, 68, 136, 0.2);
+            padding: 3px 8px; border-radius: 5px; cursor: pointer; transition: all 0.12s;
+        }
+        .group-cell-btn:hover {
+            background: var(--primary); color: white; transform: translateY(-1px);
+            box-shadow: 0 2px 5px rgba(0,68,136,0.25);
+        }
+
+        .drill-metric-pill {
+            display: inline-flex; align-items: center; gap: 4px; font-weight: 700;
+            color: #1b5e20; background: #e8f5e9; border: 1px solid #a5d6a7;
+            padding: 2px 8px; border-radius: 12px; cursor: pointer; font-size: 12.5px;
+            transition: all 0.12s;
+        }
+        .drill-metric-pill:hover {
+            background: #2e7d32; color: white; border-color: #1b5e20;
+            transform: scale(1.05); box-shadow: 0 2px 5px rgba(46,125,50,0.3);
+        }
+
+        .drill-delay-pill {
+            display: inline-flex; align-items: center; gap: 4px; font-weight: 600;
+            color: #b71c1c; background: #ffebee; border: 1px solid #ef9a9a;
+            padding: 2px 7px; border-radius: 10px; cursor: pointer; font-size: 12px;
+        }
+        .drill-delay-pill:hover { background: #c62828; color: white; }
+
+        /* Context Popover Menu for Group Drill-Down */
+        #drillPopover {
+            display: none; position: fixed; z-index: 3000; background: white;
+            border: 1px solid #cbd5e1; border-radius: 10px; width: 310px;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.22); padding: 12px;
+        }
+        .popover-header {
+            font-weight: 800; font-size: 13.5px; color: var(--primary);
+            border-bottom: 1px solid #eee; padding-bottom: 8px; margin-bottom: 8px;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .popover-section { font-size: 11px; font-weight: 700; color: #777; text-transform: uppercase; margin: 8px 0 4px 0; }
+        .popover-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+        .popover-btn {
+            text-align: left; padding: 6px 8px; font-size: 12px; font-weight: 600;
+            background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 5px;
+            cursor: pointer; color: #333; transition: all 0.12s;
+        }
+        .popover-btn:hover { background: var(--primary); color: white; border-color: var(--primary); }
+
+        /* Chart Container */
+        #chartBox {
+            display: none; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px;
+            padding: 15px; margin-bottom: 16px; height: 340px; position: relative;
+        }
+
+        /* Visual Iframe / Plot Containers */
+        .visual-frame-container {
+            width: 100%; height: 74vh; border: 1px solid var(--border); border-radius: 8px;
+            overflow: hidden; background: #f8fafc; position: relative;
+        }
+        .visual-frame-container iframe { width: 100%; height: 100%; border: none; }
+
+        /* Modals */
+        .modal-backdrop {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+            z-index: 2500; justify-content: center; align-items: center; padding: 15px;
+        }
+        .modal-backdrop.active { display: flex; }
+        .modal-card {
+            background: white; width: 100%; max-width: 760px; border-radius: 10px;
+            padding: 22px; max-height: 90vh; overflow-y: auto; box-shadow: 0 15px 35px rgba(0,0,0,0.3);
+        }
+        .ts-dropdown { z-index: 3500 !important; }
+        #addFilterModal .modal-card { overflow: visible; }
+
+        /* Spinner */
+        .spinner {
+            display: inline-block; width: 18px; height: 18px;
+            border: 3px solid rgba(0,68,136,0.2); border-radius: 50%;
+            border-top-color: var(--primary); animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ==========================================
+           MOBILE & TOUCH OPTIMIERUNG (< 900px)
+           ========================================== */
+        .mobile-drawer-btn { display: none; }
+
+        .mobile-module-dropdown-wrapper { display: none; }
+
+        @media (max-width: 900px) {
+            body { padding: 8px; }
+
+            .top-bar { padding: 12px; gap: 8px; }
+            .top-bar h1 { font-size: 17px; }
+            .top-nav { width: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
+            .top-nav .btn { flex: 1 1 calc(50% - 6px); justify-content: center; font-size: 12px; padding: 7px 8px; }
+
+            .control-panel {
+                grid-template-columns: 1fr !important;
+                padding: 12px;
+                gap: 10px;
+            }
+
+            .kpi-ribbon {
+                grid-template-columns: repeat(2, 1fr) !important;
+                gap: 8px;
+            }
+            .kpi-card { padding: 8px 10px; }
+            .kpi-val { font-size: 16px; }
+            .kpi-label { font-size: 10px; }
+
+            .drill-bar { padding: 8px 10px; flex-direction: column; align-items: stretch; }
+
+            .mobile-module-dropdown-wrapper {
+                display: block;
+                margin-bottom: 12px;
+            }
+
+            /* Modul-Tabs horizontal wischbar */
+            .module-tabs {
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                gap: 6px;
+                padding-bottom: 6px;
+                scrollbar-width: none;
+            }
+            .module-tabs::-webkit-scrollbar {
+                display: none;
+            }
+            .module-tab { padding: 8px 12px; font-size: 12px; flex-shrink: 0; border-radius: 20px; }
+
+            /* Explorer: Sidebar als einklappbares Mobile-Menü statt Sticky-Overlay */
+            .explorer-grid {
+                grid-template-columns: 1fr !important;
+                gap: 10px;
+            }
+            .mobile-drawer-btn {
+                display: flex;
+                width: 100%;
+                justify-content: space-between;
+                align-items: center;
+                background: var(--primary);
+                color: white;
+                padding: 11px 14px;
+                border-radius: 8px;
+                border: none;
+                font-weight: 700;
+                font-size: 14px;
+                cursor: pointer;
+            }
+            .sidebar-card {
+                position: static !important;
+                max-height: none !important;
+                display: none;
+                margin-bottom: 8px;
+            }
+            .sidebar-card.mobile-open {
+                display: block !important;
+            }
+
+            .content-card { padding: 12px; }
+            .table-toolbar { flex-direction: column; align-items: stretch; }
+            .table-toolbar > div:last-child {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 6px;
+            }
+            #tableSearchInput {
+                grid-column: 1 / -1;
+                width: 100% !important;
+            }
+
+            /* Tabellen sauber horizontal scrollbar mit klebender erster Spalte */
+            .table-wrapper {
+                max-height: 65vh;
+                -webkit-overflow-scrolling: touch;
+            }
+            table.interactive-table th,
+            table.interactive-table td {
+                padding: 7px 9px;
+                font-size: 12px;
+            }
+            /* Flexible Sticky Columns auf Mobilgeräten: Begrenzung auf max 42vw */
+            table.interactive-table th.sticky-col,
+            table.interactive-table td.sticky-col {
+                max-width: 42vw;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            table.interactive-table th.sticky-col .group-cell-btn,
+            table.interactive-table td.sticky-col .group-cell-btn {
+                max-width: 100%;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            /* Drill-Down Popover als zentriertes Mobile Bottom-Sheet */
+            #drillPopover {
+                left: 10px !important;
+                right: 10px !important;
+                top: auto !important;
+                bottom: 12px !important;
+                width: auto !important;
+                max-width: none !important;
+                max-height: 75vh;
+                overflow-y: auto;
+                box-shadow: 0 -4px 25px rgba(0,0,0,0.35);
+                border: 2px solid var(--primary);
+            }
+
+            /* Fixieren Popover als zentriertes Mobile Bottom-Sheet */
+            #pinMenuPopover {
+                position: fixed !important;
+                left: 10px !important;
+                right: 10px !important;
+                top: auto !important;
+                bottom: 12px !important;
+                width: auto !important;
+                max-width: none !important;
+                max-height: 78vh !important;
+                overflow-y: auto !important;
+                z-index: 3001 !important;
+                box-shadow: 0 -4px 25px rgba(0,0,0,0.35) !important;
+                border: 2px solid var(--primary) !important;
+            }
+
+            /* Karten & Timeline auf mobilen Viewports */
+            .visual-frame-container {
+                height: 68vh;
+            }
+            .modal-card {
+                padding: 14px;
+                max-height: 88vh;
+            }
+            /* Verhindert iOS/Android Auto-Zoom bei Input-Fokus */
+            input, select, textarea, .ts-control input {
+                font-size: 16px !important;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="app-container">
+
+    <!-- 1. TOP BAR -->
+    <div class="top-bar">
+        <div>
+            <h1>🔍 Interaktive Auswertung &amp; Drill-Down Explorer</h1>
+            <div style="font-size: 12.5px; color: #666; margin-top: 2px;">
+                Klicke in jeder Tabelle auf Werte (z. B. Anzahl <b>Betreiber</b>, <b>Linien</b>, <b>Haltestellen</b>, <b>Fahrten</b>) oder Kategorien, um live ins Detail zu springen.
+            </div>
+        </div>
+        <div class="top-nav">
+            <a href="/" class="btn btn-outline" title="Zur Startseite">🏠 Start</a>
+            <a href="/ai" class="btn btn-outline" title="Zum KI-Assistenten" style="border-color:#6f42c1; color:#6f42c1;">🤖 KI-Assistent</a>
+            <a href="/dashboard" class="btn btn-outline">📊 Dashboard</a>
+            <a href="/settings" class="btn btn-outline">⚙️ Baukasten</a>
+            <button type="button" class="btn btn-secondary" onclick="triggerDbSync()" id="syncBtn">🔄 Neuste Fahrten laden</button>
+        </div>
+    </div>
+
+    <!-- 2. GLOBAL FILTER & CONTEXT PANEL -->
+    <div class="control-panel">
+        <div class="control-group">
+            <label>Auswertungs-Modus</label>
+            <div class="mode-switch">
+                <button type="button" id="modeBtnUser" class="active" onclick="setAnalysisMode('user')">👤 Einzel-User</button>
+                <button type="button" id="modeBtnShared" onclick="setAnalysisMode('shared')">👥 Team (Shared)</button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>Ausgewählte User (Für Einzel- &amp; Team-Analyse)</label>
+            <select id="userSelect" multiple placeholder="User auswählen oder eintippen...">
+                <option value="{{ username }}" selected>{{ username }} (Du)</option>
+                {% for u in available_users %}
+                    {% if u != username %}
+                        <option value="{{ u }}">{{ u }}</option>
+                    {% endif %}
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label>Zeitraum (Start &amp; Ende)</label>
+            <div style="display: flex; gap: 6px;">
+                <input type="date" id="startDate" class="form-control" onchange="reloadCurrentModule()">
+                <input type="date" id="endDate" class="form-control" onchange="reloadCurrentModule()">
+            </div>
+            <div class="date-quick-pills">
+                <button type="button" class="date-pill" onclick="setQuickDate('all')">Alle</button>
+                <button type="button" class="date-pill" onclick="setQuickDate('2026')">2026</button>
+                <button type="button" class="date-pill" onclick="setQuickDate('2025')">2025</button>
+                <button type="button" class="date-pill" onclick="setQuickDate('month')">Dieser Monat</button>
+                <button type="button" class="date-pill" onclick="setQuickDate('30d')">Letzte 30 Tage</button>
+                <button type="button" class="date-pill" onclick="setQuickDate('7d')">Letzte 7 Tage</button>
+            </div>
+        </div>
+
+        <div class="control-group" style="display: flex; flex-direction: column; gap: 6px;">
+            <div id="activeUserSelectorBox" style="display: none;">
+                <label>Aktiver Einzel-User:</label>
+                <select id="primaryUserSelect" class="form-control" onchange="reloadCurrentModule()"></select>
+            </div>
+            <button type="button" class="btn" style="width: 100%; justify-content: center; height: 38px;" onclick="reloadCurrentModule()">
+                🚀 Daten aktualisieren
+            </button>
+        </div>
+    </div>
+
+    <!-- Live Sync Status Bar (falls DB-Sync läuft) -->
+    <div id="syncStatusBar" style="display:none; background:#1e1e1e; color:#00ff00; padding:10px 16px; border-radius:8px; margin-bottom:14px; font-family:monospace; font-size:12.5px;"></div>
+
+    <!-- Hinweis-Banner bei 0 Fahrten ohne aktive Filter -->
+    <div id="noUserDataBanner" style="display: none; background: #fff8e1; border: 1px solid #ffe082; border-left: 5px solid #ff9800; border-radius: 8px; padding: 12px 16px; margin-bottom: 14px; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+        <div style="font-size: 13.5px; color: #b78103; font-weight: 500; display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 18px;">⚠️</span>
+            <span id="noUserDataText">Es wurden keine Daten gefunden. Möglicherweise musst du die Daten erst einmal laden.</span>
+        </div>
+        <button type="button" class="btn btn-sm" id="bannerSyncBtn" onclick="triggerDbSync()" style="background:#ff9800; color:white; font-weight:bold; padding:6px 14px; border:none; border-radius:6px; cursor:pointer;">
+            🔄 Daten jetzt laden
+        </button>
+    </div>
+
+    <!-- 3. LIVE KPI SUMMARY RIBBON -->
+    <div class="kpi-ribbon" id="kpiRibbon">
+        <div class="kpi-card" onclick="quickJumpToSheet('journeys')" title="Klicken, um alle Einzelfahrten dieser Auswahl anzuzeigen">
+            <div class="kpi-label">🚆 Fahrten (Gefiltert)</div>
+            <div class="kpi-val" id="kpiTrips">-</div>
+            <div class="kpi-sub">Klick ➔ Fahrtenliste</div>
+        </div>
+        <div class="kpi-card" onclick="quickJumpToGrouped('category', 'Kategorie')" title="Klicken für Aufschlüsselung nach Verkehrsmittel">
+            <div class="kpi-label">📏 Gesamtdistanz</div>
+            <div class="kpi-val" id="kpiDist">-</div>
+            <div class="kpi-sub" id="kpiSpeed">∅ - km/h</div>
+        </div>
+        <div class="kpi-card" onclick="quickJumpToTemporal('weekday', 'Wochentage')" title="Klicken für zeitliche Auswertung">
+            <div class="kpi-label">⏱️ Reine Fahrzeit</div>
+            <div class="kpi-val" id="kpiTime">-</div>
+            <div class="kpi-sub" id="kpiDelay">∅ Verspätung: -</div>
+        </div>
+        <div class="kpi-card" onclick="quickJumpToGrouped('operatorName', 'Betreiber')" title="Klicken, um diese Betreiber anzuzeigen">
+            <div class="kpi-label">🏢 Betreiber</div>
+            <div class="kpi-val" id="kpiOperators">-</div>
+            <div class="kpi-sub">Klick ➔ Betreiber-Details</div>
+        </div>
+        <div class="kpi-card" onclick="quickJumpToGrouped2('operatorName', 'lineName', 'Linien')" title="Klicken, um alle Linien anzuzeigen">
+            <div class="kpi-label">🛤️ Linien</div>
+            <div class="kpi-val" id="kpiLines">-</div>
+            <div class="kpi-sub">Klick ➔ Linien-Details</div>
+        </div>
+        <div class="kpi-card" onclick="quickJumpToSheet('stops')" title="Klicken, um alle besuchten Haltestellen anzuzeigen">
+            <div class="kpi-label">🚏 Haltestellen</div>
+            <div class="kpi-val" id="kpiStops">-</div>
+            <div class="kpi-sub">Klick ➔ Haltestellen-Ranking</div>
+        </div>
+    </div>
+
+    <!-- 4. DRILL-DOWN BREADCRUMB & ACTIVE FILTER BAR -->
+    <div class="drill-bar">
+        <div class="drill-path" id="drillBreadcrumb">
+            <strong>🧭 Drill-Down-Pfad &amp; Aktive Filter:</strong>
+            <span style="color: #666;">Keine Einschränkung (Alle Fahrten im Zeitraum)</span>
+        </div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+            <button type="button" class="btn btn-sm btn-outline" id="btnBackHistory" onclick="popDrillHistory()" style="display: none;">⬅️ Zurück zur vorherigen Ansicht</button>
+            <button type="button" class="btn btn-sm btn-outline" onclick="openAddFilterModal()">➕ Filter hinzufügen</button>
+            <button type="button" class="btn btn-sm btn-danger" id="btnClearFilters" onclick="clearAllFilters()" style="display: none;">🗑️ Alle Filter zurücksetzen</button>
+        </div>
+    </div>
+
+    <!-- MOBILE MODUL SELECTOR -->
+    <div class="mobile-module-dropdown-wrapper">
+        <label style="font-size: 11px; font-weight: 700; color: #555; text-transform: uppercase; margin-bottom: 4px; display: block;">Modul auswählen:</label>
+        <select id="mobileModuleSelect" class="form-control" onchange="switchModule(this.value)">
+            <option value="tables">📊 Tabellen &amp; Drill-Down Explorer</option>
+            <option value="polyline">🗺️ Interaktive Streckenkarte</option>
+            <option value="stops_map">📍 Interaktive Haltestellenkarte</option>
+            <option value="timeline">⏱️ Interaktive Timeline</option>
+            <option value="ganglinie">📈 Ganglinien (Tageszeiten/Woche/Jahr)</option>
+            <option value="delay_plot">🎯 Verspätungs-Verteilungen (Gauß/KDE)</option>
+        </select>
+    </div>
+
+    <!-- 5. MODULE TABS (ALLE DATEITYPEN INTERAKTIV) -->
+    <div class="module-tabs">
+        <button type="button" class="module-tab active" id="modTab-tables" onclick="switchModule('tables')">📊 Tabellen &amp; Drill-Down Explorer</button>
+        <button type="button" class="module-tab" id="modTab-polyline" onclick="switchModule('polyline')">🗺️ Interaktive Streckenkarte</button>
+        <button type="button" class="module-tab" id="modTab-stops_map" onclick="switchModule('stops_map')">📍 Interaktive Haltestellenkarte</button>
+        <button type="button" class="module-tab" id="modTab-timeline" onclick="switchModule('timeline')">⏱️ Interaktive Timeline</button>
+        <button type="button" class="module-tab" id="modTab-ganglinie" onclick="switchModule('ganglinie')">📈 Ganglinien (Tageszeiten/Woche/Jahr)</button>
+        <button type="button" class="module-tab" id="modTab-delay_plot" onclick="switchModule('delay_plot')">🎯 Verspätungs-Verteilungen (Gauß/KDE)</button>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- MODUL 1: TABELLEN & DRILL-DOWN EXPLORER    -->
+    <!-- ========================================== -->
+    <div id="module-tables" class="module-section">
+        <div class="explorer-grid">
+            <!-- Left Sidebar: Saved Sheets & Presets -->
+            <button type="button" class="mobile-drawer-btn" id="mobileSidebarToggle" onclick="toggleMobileSidebar()">
+                <span>📑 Auswertung / Tabellenblatt wählen</span>
+                <span id="mobileSidebarArrow">▼</span>
+            </button>
+            <div class="sidebar-card">
+                <div class="sidebar-section-title">⚡ Freie Abfrage</div>
+                <button type="button" class="sheet-nav-btn" id="navBtn-adhoc" onclick="toggleAdhocBuilder()">
+                    <span>🛠️ Ad-Hoc Gruppierung bauen</span>
+                    <span class="badge-mini">Neu</span>
+                </button>
+
+                <div id="sidebarSheetsList"></div>
+            </div>
+
+            <!-- Right Main Area: Ad-hoc Builder + Chart + Interactive Table -->
+            <div class="content-card">
+                <!-- Collapsible Ad-Hoc Builder -->
+                <div class="adhoc-box" id="adhocBuilderBox" style="display: none;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                        <strong style="color:var(--primary); font-size:14px;">🛠️ Freie Ad-Hoc Auswertung zusammenstellen (1–4 Parameter)</strong>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="toggleAdhocBuilder()">Schließen ✖</button>
+                    </div>
+                    <div class="adhoc-grid">
+                        <div>
+                            <label style="font-size:11px; font-weight:bold;">1. Parameter (Hauptgruppe):</label>
+                            <select id="adhocArg1" class="form-control"></select>
+                        </div>
+                        <div>
+                            <label style="font-size:11px; font-weight:bold;">2. Parameter (Optional):</label>
+                            <select id="adhocArg2" class="form-control"></select>
+                        </div>
+                        <div>
+                            <label style="font-size:11px; font-weight:bold;">3. Parameter (Optional):</label>
+                            <select id="adhocArg3" class="form-control"></select>
+                        </div>
+                        <div>
+                            <label style="font-size:11px; font-weight:bold;">4. Parameter (Optional):</label>
+                            <select id="adhocArg4" class="form-control"></select>
+                        </div>
+                        <div>
+                            <label style="font-size:11px; font-weight:bold;">Sortierung:</label>
+                            <select id="adhocSort" class="form-control">
+                                <option value="distance">Nach Distanz (km)</option>
+                                <option value="trips">Nach Fahrten</option>
+                            </select>
+                        </div>
+                        <div style="display:flex; gap:6px; align-items:center;">
+                            <label style="font-size:12px; cursor:pointer; display:flex; align-items:center; gap:4px; white-space: nowrap;">
+                                <input type="checkbox" id="adhocExcludeEmpty" checked> Ohne Leere (N/A)
+                            </label>
+                            <button type="button" class="btn btn-sm btn-success" onclick="runAdhocQuery()">▶️ Auswerten</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Table Toolbar -->
+                <div class="table-toolbar">
+                    <div class="table-title-area">
+                        <h2 id="currentSheetTitle">Kategorie</h2>
+                        <div class="table-subtitle" id="currentSheetSubtitle">Lade Daten...</div>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                        <input type="text" id="tableSearchInput" class="form-control" style="width: 210px;" placeholder="🔍 In Tabelle filtern..." oninput="filterRenderedTable()">
+                        <div style="position: relative; display: inline-block;">
+                            <button type="button" class="btn btn-sm btn-outline" id="pinMenuBtn" onclick="togglePinMenu(event)" title="Spalten &amp; Zeilen fixieren">
+                                📌 Fixieren <span class="badge-count" id="pinCounterBadge" style="display:none; font-size:11px; padding:1px 6px; margin-left:4px; background:var(--primary); color:white; border-radius:10px;">0</span>
+                            </button>
+                            <div id="pinMenuPopover" class="pin-menu-popover" style="display:none;" onclick="event.stopPropagation()">
+                                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 10px;">
+                                    <strong style="font-size: 13.5px; color: var(--primary);">📌 Fixierungs- &amp; Spalten-Optionen</strong>
+                                    <button type="button" style="background:none; border:none; font-size:14px; cursor:pointer; color:#888;" onclick="togglePinMenu(false)">✖</button>
+                                </div>
+                                <div style="margin-bottom: 12px;">
+                                    <div style="font-weight: bold; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.5px; color: #555; margin-bottom: 6px;">
+                                        ↔️ Spalten anheften &amp; anordnen
+                                    </div>
+                                    <label style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; cursor: pointer; margin-bottom: 5px;">
+                                        <input type="checkbox" id="pinColMasterToggle" onchange="handlePinColMasterToggle(this.checked)">
+                                        <span>Spalten-Fixierung aktiv</span>
+                                    </label>
+                                    <label style="display: flex; align-items: center; gap: 8px; font-size: 11.5px; cursor: pointer; margin-bottom: 8px; color: #475569;">
+                                        <input type="checkbox" id="pinAutoMoveToggle" checked onchange="handleAutoMovePinnedToggle(this.checked)">
+                                        <span>Angeheftete Spalten automatisch ganz nach vorne ziehen</span>
+                                    </label>
+                                    <div id="pinColListContainer" style="max-height: 220px; overflow-y: auto; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 8px;">
+                                        <!-- Column checkboxes & order controls -->
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; gap: 6px;">
+                                        <button type="button" class="btn btn-sm" style="font-size: 11px; padding: 2px 7px; background: #f1f5f9; border: 1px solid #cbd5e1; color: #333;" onclick="resetColumnOrder()" title="Original-Reihenfolge der Spalten wiederherstellen">🔄 Reihenfolge zurücksetzen</button>
+                                        <button type="button" class="btn btn-sm" style="font-size: 11px; padding: 2px 7px; background: #e2e8f0; color: #333;" onclick="clearAllPinnedColumns()">Alle Spalten lösen</button>
+                                    </div>
+                                </div>
+                                <div style="border-top: 1px solid #e2e8f0; padding-top: 10px;">
+                                    <div style="font-weight: bold; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.5px; color: #555; margin-bottom: 6px;">
+                                        ↕️ Zeilen anheften (Vertikal)
+                                    </div>
+                                    <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; margin-bottom: 8px;">
+                                        <input type="checkbox" id="pinHeaderToggle" checked onchange="handlePinHeaderToggle(this.checked)">
+                                        <span>Tabellenkopf (thead) anheften</span>
+                                    </label>
+                                    <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #666; margin-bottom: 6px;">
+                                        <span id="pinnedRowsCountLabel">0 Datenzeilen angeheftet</span>
+                                        <button type="button" class="btn btn-sm" style="font-size: 11px; padding: 2px 7px; background: #e2e8f0; color: #333;" onclick="unpinAllRows()">Alle Zeilen lösen</button>
+                                    </div>
+                                    <div style="font-size: 11px; color: #888; line-height: 1.35;">
+                                        💡 Tipp: Klicke auf 📌 am Zeilenanfang, um Datenzeilen oben zu fixieren.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline" onclick="toggleInteractiveChart()">📊 Live-Diagramm</button>
+                        <button type="button" class="btn btn-sm btn-outline" onclick="exportCurrentTable('csv')">📥 CSV</button>
+                        <button type="button" class="btn btn-sm btn-success" onclick="exportCurrentTable('xlsx')">📗 Als Excel (.xlsx)</button>
+                    </div>
+                </div>
+
+                <!-- Optional Interactive Chart.js Box -->
+                <div id="chartBox">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <strong style="font-size:13px; color:var(--primary);">📈 Visuelle Auswertung (Klick auf Balken = Drill-Down):</strong>
+                            <select id="chartMetricSelect" class="form-control" style="width:auto; padding:3px 8px; font-size:12px;" onchange="updateInteractiveChart()"></select>
+                            <select id="chartTypeSelect" class="form-control" style="width:auto; padding:3px 8px; font-size:12px;" onchange="updateInteractiveChart()">
+                                <option value="bar">Balkendiagramm</option>
+                                <option value="doughnut">Kreis-/Donut-Diagramm (Top 12)</option>
+                                <option value="line">Liniendiagramm</option>
+                            </select>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="toggleInteractiveChart()">Ausblenden ✖</button>
+                    </div>
+                    <div style="height: 280px;">
+                        <canvas id="interactiveCanvas"></canvas>
+                    </div>
+                </div>
+
+                <!-- Main Data Table -->
+                <div class="table-wrapper" id="tableContainer">
+                    <div style="padding: 40px; text-align: center; color: #666;">
+                        <div class="spinner"></div> Lade interaktive Auswertung...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- MODUL 2: STRECKENKARTE (POLYLINES)         -->
+    <!-- ========================================== -->
+    <div id="module-polyline" class="module-section" style="display: none;">
+        <div class="content-card">
+            <div class="table-toolbar">
+                <div class="table-title-area">
+                    <h2>🗺️ Interaktive Streckenkarte (Polylines)</h2>
+                    <div class="table-subtitle">Zeigt alle gefahrenen Streckenabschnitte der gewählten User &amp; aktiven Drill-Down-Filter.</div>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                    <label style="font-size: 13px; cursor: pointer;"><input type="checkbox" id="polyUseFilters" checked onchange="loadVisualModule('polyline')"> Aktive Drill-Down-Filter anwenden</label>
+                    <label style="font-size: 13px; cursor: pointer;"><input type="checkbox" id="polyLiteMode" onchange="loadVisualModule('polyline')"> Lite-Version (Mobil)</label>
+                    <button type="button" class="btn btn-sm" onclick="loadVisualModule('polyline')">🔄 Karte neu generieren</button>
+                    <a id="polyNewTabBtn" href="#" target="_blank" class="btn btn-sm btn-outline" style="display:none;">⛶ In neuem Tab öffnen</a>
+                    <a id="polyDownloadBtn" href="#" class="btn btn-sm btn-success" style="display:none;">📥 HTML Download</a>
+                </div>
+            </div>
+            <div class="visual-frame-container" id="polylineContainer"></div>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- MODUL 3: HALTESTELLENKARTE                 -->
+    <!-- ========================================== -->
+    <div id="module-stops_map" class="module-section" style="display: none;">
+        <div class="content-card">
+            <div class="table-toolbar">
+                <div class="table-title-area">
+                    <h2>📍 Interaktive Haltestellenkarte (Pins, Heatmap, Aktionsradius)</h2>
+                    <div class="table-subtitle">Visualisiert alle besuchten Stationen, Haupthaltestellen (Hubs) und Extrema.</div>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                    <label style="font-size: 13px; cursor: pointer;"><input type="checkbox" id="stopsMapUseFilters" checked onchange="loadVisualModule('stops_map')"> Aktive Drill-Down-Filter anwenden</label>
+                    <label style="font-size: 13px; cursor: pointer;"><input type="checkbox" id="stopsMapLiteMode" onchange="loadVisualModule('stops_map')"> Lite-Version</label>
+                    <button type="button" class="btn btn-sm" onclick="loadVisualModule('stops_map')">🔄 Karte neu generieren</button>
+                    <a id="stopsMapNewTabBtn" href="#" target="_blank" class="btn btn-sm btn-outline" style="display:none;">⛶ In neuem Tab öffnen</a>
+                    <a id="stopsMapDownloadBtn" href="#" class="btn btn-sm btn-success" style="display:none;">📥 HTML Download</a>
+                </div>
+            </div>
+            <div class="visual-frame-container" id="stopsMapContainer"></div>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- MODUL 4: INTERAKTIVE TIMELINE              -->
+    <!-- ========================================== -->
+    <div id="module-timeline" class="module-section" style="display: none;">
+        <div class="content-card">
+            <div class="table-toolbar">
+                <div class="table-title-area">
+                    <h2>⏱️ Interaktive Timeline (Zeitachse Plan vs. Ist &amp; Umstiege)</h2>
+                    <div class="table-subtitle">Zoombare Zeitachse mit Verspätungsversatz, Umsteigezeiten und gemeinsamen Fahrten.</div>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                    <label style="font-size: 13px; cursor: pointer;"><input type="checkbox" id="timelineUseFilters" checked onchange="loadVisualModule('timeline')"> Aktive Drill-Down-Filter anwenden</label>
+                    <button type="button" class="btn btn-sm" onclick="loadVisualModule('timeline')">🔄 Timeline generieren</button>
+                    <a id="timelineNewTabBtn" href="#" target="_blank" class="btn btn-sm btn-outline" style="display:none;">⛶ In neuem Tab öffnen</a>
+                    <a id="timelineDownloadBtn" href="#" class="btn btn-sm btn-success" style="display:none;">📥 HTML Download</a>
+                </div>
+            </div>
+            <div class="visual-frame-container" id="timelineContainer"></div>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- MODUL 5: GANGLINIEN & ZEIT-ANALYSEN        -->
+    <!-- ========================================== -->
+    <div id="module-ganglinie" class="module-section" style="display: none;">
+        <div class="content-card">
+            <div class="table-toolbar">
+                <div class="table-title-area">
+                    <h2>📈 Tageszeiten &amp; Ganglinien-Generator</h2>
+                    <div class="table-subtitle">Kombiniert interaktive Diagramme (mit Drill-Down) und den hochauflösenden Matplotlib-PNG-Export.</div>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                    <select id="ganglinieTypeSelect" class="form-control" style="width: auto;" onchange="loadVisualModule('ganglinie')">
+                        {% for k, lbl in available_temporal.items() %}
+                        <option value="{{ k }}">{{ lbl }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="button" class="btn btn-sm" onclick="loadVisualModule('ganglinie')">🔄 Aktualisieren</button>
+                    <a id="ganglinieDownloadBtn" href="#" class="btn btn-sm btn-success" style="display:none;">📥 PNG-Plot Download</a>
+                </div>
+            </div>
+            <div id="ganglinieContainer" style="text-align: center; padding: 20px;"></div>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- MODUL 6: VERSPÄTUNGS-VERTEILUNGEN          -->
+    <!-- ========================================== -->
+    <div id="module-delay_plot" class="module-section" style="display: none;">
+        <div class="content-card">
+            <div class="table-toolbar">
+                <div class="table-title-area">
+                    <h2>🎯 Verspätungs-Verteilungen (Gauß, Poisson &amp; KDE)</h2>
+                    <div class="table-subtitle">Wissenschaftlicher Verteilungs-Vergleich der Ankunftsverspätungen inkl. Direkt-Sprung zu verspäteten Fahrten.</div>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button type="button" class="btn btn-sm" onclick="loadVisualModule('delay_plot')">🔄 Plot berechnen</button>
+                    <a id="delayPlotDownloadBtn" href="#" class="btn btn-sm btn-success" style="display:none;">📥 PNG-Plot Download</a>
+                </div>
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 15px;">
+                <button type="button" class="btn btn-sm btn-outline" onclick="drillByDelayBucket('early', 'Verfrüht (< 0 Min)')">🟢 Verfrühte Fahrten zeigen</button>
+                <button type="button" class="btn btn-sm btn-outline" onclick="drillByDelayBucket('ontime', 'Pünktlich (0 Min)')">🔵 Pünktliche Fahrten (0 Min) zeigen</button>
+                <button type="button" class="btn btn-sm btn-outline" onclick="drillByDelayBucket('del_3', 'Ab 3 Min verspätet')">🟡 Fahrten >= 3 Min Verspätung</button>
+                <button type="button" class="btn btn-sm btn-outline" onclick="drillByDelayBucket('del_6', 'Ab 6 Min verspätet')">🟠 Fahrten >= 6 Min Verspätung</button>
+                <button type="button" class="btn btn-sm btn-outline" onclick="drillByDelayBucket('del_15', 'Ab 15 Min verspätet')">🔴 Fahrten >= 15 Min Verspätung</button>
+                <button type="button" class="btn btn-sm btn-outline" onclick="drillByDelayBucket('del_60', 'Ab 60 Min verspätet')">🟣 Fahrten >= 60 Min Verspätung</button>
+            </div>
+            <div id="delayPlotContainer" style="text-align: center; padding: 20px;"></div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Backdrop für Mobile Fixieren-Menü -->
+<div id="pinMenuBackdrop" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.45); z-index:3000;" onclick="togglePinMenu(false)"></div>
+
+<!-- ========================================== -->
+<!-- POPOVER: KONTEXT-DRILL-DOWN MENÜ           -->
+<!-- ========================================== -->
+<div id="drillPopover">
+    <div class="popover-header">
+        <span id="popoverTitle">Auswahl</span>
+        <button type="button" class="btn btn-sm btn-secondary" style="padding:2px 6px;" onclick="closeDrillPopover()">✖</button>
+    </div>
+    <div class="popover-section">🔍 Diesen Wert weiter aufschlüsseln nach:</div>
+    <div class="popover-grid">
+        <button type="button" class="popover-btn" onclick="executePopoverDrill('grouped', ['operatorName'], 'Betreiber')">🏢 Betreiber</button>
+        <button type="button" class="popover-btn" onclick="executePopoverDrill('grouped', ['lineName'], 'Linien')">🛤️ Linien</button>
+        <button type="button" class="popover-btn" onclick="executePopoverDrill('grouped', ['category'], 'Kategorie')">🚆 Kategorie</button>
+        <button type="button" class="popover-btn" onclick="executePopoverDrill('grouped', ['locomotiveClass'], 'Baureihe')">🚂 Baureihe</button>
+        <button type="button" class="popover-btn" onclick="executePopoverDrill('grouped', ['vehicleNumber'], 'Fahrzeugnummer')">🔢 Fahrzeugnummer</button>
+        <button type="button" class="popover-btn" onclick="executePopoverDrill('grouped', ['origin.stopName', 'destination.stopName'], 'Verbindungen')">🔄 Verbindungen</button>
+        <button type="button" class="popover-btn" onclick="executePopoverDrill('grouped', ['business'], 'Fahrtgrund')">💼 Fahrtgrund</button>
+        <button type="button" class="popover-btn" onclick="executePopoverDrill('grouped', ['ticket'], 'Ticket')">🎫 Ticket</button>
+        <button type="button" class="popover-btn" onclick="executePopoverDrill('grouped', ['travelClass'], 'Reiseklasse')">💺 Reiseklasse</button>
+        <button type="button" class="popover-btn" onclick="executePopoverDrill('grouped', ['year_planned'], 'Jahr (Plan)')">📅 Jahr</button>
+    </div>
+    <div class="popover-section">📋 Detail-Ansichten &amp; Karten für diese Auswahl:</div>
+    <div class="popover-grid">
+        <button type="button" class="popover-btn" style="background:#eef5fa; color:#004488;" onclick="executePopoverDrill('journeys', [], 'Fahrtenliste')">📋 Alle Einzelfahrten</button>
+        <button type="button" class="popover-btn" style="background:#eef5fa; color:#004488;" onclick="executePopoverDrill('stops', [], 'Haltestellen')">🚏 Haltestellen</button>
+        <button type="button" class="popover-btn" style="background:#eef5fa; color:#004488;" onclick="executePopoverDrill('stops_via', [], 'Haltestellen (mit Via)')">🚉 Haltestellen + Via</button>
+        <button type="button" class="popover-btn" style="background:#eef5fa; color:#004488;" onclick="executePopoverDrill('stats', [], 'Statistiken')">📊 Statistik-Blatt</button>
+        <button type="button" class="popover-btn" style="background:#e8f5e9; color:#1b5e20;" onclick="executePopoverVisual('polyline')">🗺️ Auf Streckenkarte</button>
+        <button type="button" class="popover-btn" style="background:#e8f5e9; color:#1b5e20;" onclick="executePopoverVisual('stops_map')">📍 Haltestellenkarte</button>
+    </div>
+</div>
+
+<!-- ========================================== -->
+<!-- MODAL 1: FAHRT-INSPEKTOR (STATUS DETAILS)  -->
+<!-- ========================================== -->
+<div class="modal-backdrop" id="statusModal">
+    <div class="modal-card">
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:10px; margin-bottom:15px;">
+            <h3 style="margin:0; color:var(--primary);" id="statusModalTitle">🔎 Fahrt-Details</h3>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="closeStatusModal()">✖</button>
+        </div>
+        <div id="statusModalBody">Lade...</div>
+    </div>
+</div>
+
+<!-- ========================================== -->
+<!-- MODAL 2: MANUELLEN FILTER HINZUFÜGEN       -->
+<!-- ========================================== -->
+<div class="modal-backdrop" id="addFilterModal">
+    <div class="modal-card" style="max-width: 480px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:10px; margin-bottom:15px;">
+            <h3 style="margin:0; color:var(--primary);">➕ Eigenen Drill-Down-Filter setzen</h3>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="closeAddFilterModal()">✖</button>
+        </div>
+        <div style="margin-bottom: 12px;">
+            <label style="font-size:13px; font-weight:bold; display:block; margin-bottom:5px;">Feld / Parameter:</label>
+            <select id="manualFilterCol" class="form-control" onchange="onManualFilterColChange()"></select>
+        </div>
+        <div style="margin-bottom: 16px;">
+            <label style="font-size:13px; font-weight:bold; display:block; margin-bottom:5px;">Exakter Wert (z. B. Fernverkehr, ICE 100, Braunschweig Hbf (HBS)):</label>
+            <select id="manualFilterVal" placeholder="Tippen zum Suchen oder aus Liste wählen..."></select>
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:8px;">
+            <button type="button" class="btn btn-secondary" onclick="closeAddFilterModal()">Abbrechen</button>
+            <button type="button" class="btn btn-success" onclick="applyManualFilter()">✅ Filter anwenden</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // ==========================================
+    // GLOBALE STATE-VARIABLEN
+    // ==========================================
+    const loggedInUser = {{ username | tojson }};
+    const userSettings = {{ current_settings | tojson }};
+    const groupColumns = {{ available_group_cols | tojson }};
+    const temporalTypes = {{ available_temporal | tojson }};
+    const geoColumns = {{ available_geo | tojson }};
+
+    let analysisMode = 'user'; // 'user' oder 'shared'
+    let activeModule = 'tables'; // 'tables', 'polyline', 'stops_map', 'timeline', 'ganglinie', 'delay_plot'
+    let currentSheetConfig = null;
+    let activeFilters = []; // Array aus {col: 'category', val: 'Fernverkehr', label: 'Kategorie: Fernverkehr'}
+    let drillHistory = [];  // Stack für den Zurück-Button
+
+    let lastQueryResult = null;
+    let currentSortCol = null;
+    let currentSortAsc = true;
+    let chartInstance = null;
+    let popoverContext = null; // Speichert den angeklickten Filter für das Kontextmenü
+
+    let tomUserSelect = null;
+    let tomFilterValSelect = null;
+
+    // Sticky & Pinning State
+    let currentStickySettings = {
+        colStickyEnabled: null,
+        headerStickyEnabled: true,
+        pinnedColumns: []
+    };
+    let currentStickySheetName = null;
+    let pinnedRowKeys = new Set();
+
+    // Mapping von deutschen Spaltenüberschriften zurück auf interne Filter-Keys
+    const labelToColKey = {};
+    for (const [k, info] of Object.entries(groupColumns)) {
+        labelToColKey[info.label] = k;
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        tomUserSelect = new TomSelect("#userSelect", {
+            create: true,
+            plugins: ['remove_button'],
+            placeholder: "User auswählen oder eintippen...",
+            onChange: function() {
+                updatePrimaryUserDropdown();
+                reloadCurrentModule();
+            }
+        });
+
+        // Paste-Support für Komma-Listen
+        tomUserSelect.control_input.addEventListener('paste', function(e) {
+            e.preventDefault();
+            const pastedText = (e.clipboardData || window.clipboardData).getData('text');
+            pastedText.replace(/[\[\]'"]/g, '').split(/,\s*/).forEach(item => {
+                const clean = item.trim();
+                if (clean) tomUserSelect.createItem(clean);
+            });
+        });
+
+        tomFilterValSelect = new TomSelect("#manualFilterVal", {
+            maxItems: 1,
+            create: true,
+            valueField: 'value',
+            labelField: 'value',
+            searchField: ['value'],
+            placeholder: 'Tippen zum Suchen (z. B. Michelfelder, ICE, Fernverkehr)...',
+            loadThrottle: 200,
+            shouldLoad: function(query) { return true; },
+            load: function(query, callback) {
+                fetchManualFilterSuggestions(query, callback);
+            },
+            render: {
+                option: function(item, escape) {
+                    const countBadge = item.count
+                        ? `<span style="float:right; background:#eef5fa; color:#004488; font-size:11px; padding:1px 7px; border-radius:10px; font-weight:bold;">${item.count}×</span>`
+                        : '';
+                    return `<div style="padding:6px 10px;"><span>${escape(item.value)}</span>${countBadge}</div>`;
+                },
+                option_create: function(data, escape) {
+                    return `<div class="create" style="padding:6px 10px;">Exakten Wert übernehmen: <strong>${escape(data.input)}</strong></div>`;
+                }
+            }
+        });
+
+        populateAdhocDropdowns();
+        updatePrimaryUserDropdown();
+        renderSidebarSheets();
+
+        if (window.innerWidth <= 900) {
+            const polyLite = document.getElementById('polyLiteMode');
+            if (polyLite) polyLite.checked = true;
+            const stopsLite = document.getElementById('stopsMapLiteMode');
+            if (stopsLite) stopsLite.checked = true;
+        }
+
+        // Standardmäßig mit dem ersten aktiven User-Sheet oder "Kategorie" starten
+        const defaultSheets = (userSettings.user_sheets || []).filter(s => s.enabled !== false);
+        const startSheet = defaultSheets.find(s => s.type === 'grouped' && s.args && s.args[0] === 'category')
+                        || defaultSheets[0]
+                        || { sheet_name: 'Kategorie', type: 'grouped', args: ['category'], sort_by_distance: true };
+        selectSheetConfig(startSheet, false);
+    });
+
+    function toggleMobileSidebar() {
+        const sb = document.querySelector('.sidebar-card');
+        const arrow = document.getElementById('mobileSidebarArrow');
+        if (!sb) return;
+        const isOpen = sb.classList.toggle('mobile-open');
+        if (arrow) arrow.textContent = isOpen ? '▲' : '▼';
+    }
+
+    // Schließt Popovers bei Klick außerhalb
+    document.addEventListener('click', (e) => {
+        const pop = document.getElementById('drillPopover');
+        if (pop && pop.style.display === 'block' && !pop.contains(e.target) && !e.target.closest('.group-cell-btn')) {
+            closeDrillPopover();
+        }
+        const pinPop = document.getElementById('pinMenuPopover');
+        if (pinPop && pinPop.style.display === 'block' && !pinPop.contains(e.target) && !e.target.closest('[onclick*="togglePinMenu"]')) {
+            togglePinMenu(false);
+        }
+    });
+
+    // Window Resize Handler mit Debounce für exakte Sticky-Offsets
+    let resizeStickyTimeout = null;
+    window.addEventListener('resize', () => {
+        if (resizeStickyTimeout) clearTimeout(resizeStickyTimeout);
+        resizeStickyTimeout = setTimeout(() => {
+            applyStickyLayout();
+        }, 150);
+    });
+
+    function getSelectedUsers() {
+        const vals = tomUserSelect ? tomUserSelect.getValue() : [loggedInUser];
+        return (vals && vals.length > 0) ? vals : [loggedInUser];
+    }
+
+    function getPrimaryUser() {
+        const users = getSelectedUsers();
+        const sel = document.getElementById('primaryUserSelect');
+        if (sel && sel.value && users.includes(sel.value)) return sel.value;
+        return users[0] || loggedInUser;
+    }
+
+    function updatePrimaryUserDropdown() {
+        const users = getSelectedUsers();
+        const box = document.getElementById('activeUserSelectorBox');
+        const sel = document.getElementById('primaryUserSelect');
+        if (analysisMode === 'user' && users.length > 1) {
+            box.style.display = 'block';
+            const prev = sel.value;
+            sel.innerHTML = users.map(u => `<option value="${escapeHtml(u)}">${escapeHtml(u)}</option>`).join('');
+            if (users.includes(prev)) sel.value = prev;
+        } else {
+            box.style.display = 'none';
+        }
+    }
+
+    function setAnalysisMode(mode) {
+        analysisMode = mode;
+        document.getElementById('modeBtnUser').classList.toggle('active', mode === 'user');
+        document.getElementById('modeBtnShared').classList.toggle('active', mode === 'shared');
+        updatePrimaryUserDropdown();
+        renderSidebarSheets();
+
+        const list = mode === 'user'
+            ? (userSettings.user_sheets || []).filter(s => s.enabled !== false)
+            : (userSettings.shared_sheets || []).filter(s => s.enabled !== false);
+        if (list.length > 0) {
+            selectSheetConfig(list[0], false);
+        }
+    }
+
+    function setQuickDate(preset) {
+        const sEl = document.getElementById('startDate');
+        const eEl = document.getElementById('endDate');
+        const now = new Date();
+        const fmt = d => d.toISOString().split('T')[0];
+
+        if (preset === 'all') { sEl.value = ''; eEl.value = ''; }
+        else if (preset === '2026') { sEl.value = '2026-01-01'; eEl.value = '2026-12-31'; }
+        else if (preset === '2025') { sEl.value = '2025-01-01'; eEl.value = '2025-12-31'; }
+        else if (preset === 'month') {
+            const first = new Date(now.getFullYear(), now.getMonth(), 1);
+            sEl.value = fmt(first); eEl.value = fmt(now);
+        } else if (preset === '30d') {
+            const d = new Date(); d.setDate(d.getDate() - 30);
+            sEl.value = fmt(d); eEl.value = fmt(now);
+        } else if (preset === '7d') {
+            const d = new Date(); d.setDate(d.getDate() - 7);
+            sEl.value = fmt(d); eEl.value = fmt(now);
+        }
+        reloadCurrentModule();
+    }
+
+    // ==========================================
+    // SIDEBAR & SHEET KONFIGURATIONEN
+    // ==========================================
+    function renderSidebarSheets() {
+        const container = document.getElementById('sidebarSheetsList');
+        const sheets = analysisMode === 'user'
+            ? (userSettings.user_sheets || []).filter(s => s.enabled !== false)
+            : (userSettings.shared_sheets || []).filter(s => s.enabled !== false);
+
+        const groups = {
+            '📋 Basis & Übersicht': [],
+            '📊 Gruppierte Auswertungen': [],
+            '🕒 Zeitreihen & Ganglinien': [],
+            '🌍 Geografie-Rankings': []
+        };
+
+        sheets.forEach((s, idx) => {
+            const item = { s, idx };
+            if (s.type === 'grouped' || s.type === 'shared_grouped') groups['📊 Gruppierte Auswertungen'].push(item);
+            else if (s.type === 'temporal') groups['🕒 Zeitreihen & Ganglinien'].push(item);
+            else if (s.type === 'geo') groups['🌍 Geografie-Rankings'].push(item);
+            else groups['📋 Basis & Übersicht'].push(item);
+        });
+
+        let html = '';
+        for (const [gTitle, items] of Object.entries(groups)) {
+            if (items.length === 0) continue;
+            html += `<div class="sidebar-section-title">${escapeHtml(gTitle)}</div>`;
+            items.forEach(({ s, idx }) => {
+                const isAct = currentSheetConfig && currentSheetConfig.sheet_name === s.sheet_name && currentSheetConfig.type === s.type;
+                const cfgJson = encodeURIComponent(JSON.stringify(s));
+                html += `
+                    <button type="button" class="sheet-nav-btn ${isAct ? 'active' : ''}" onclick="selectSheetFromSidebar('${cfgJson}')">
+                        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(s.sheet_name)}</span>
+                        <span class="badge-mini">${escapeHtml(s.type.replace('shared_', ''))}</span>
+                    </button>
+                `;
+            });
+        }
+        container.innerHTML = html;
+    }
+
+    function selectSheetFromSidebar(encodedCfg) {
+        const cfg = JSON.parse(decodeURIComponent(encodedCfg));
+        selectSheetConfig(cfg, true);
+    }
+
+    function selectSheetConfig(cfg, saveHistory = true) {
+        const sb = document.querySelector('.sidebar-card');
+        if (sb && sb.classList.contains('mobile-open')) {
+            sb.classList.remove('mobile-open');
+            const arrow = document.getElementById('mobileSidebarArrow');
+            if (arrow) arrow.textContent = '▼';
+        }
+        if (saveHistory && currentSheetConfig) {
+            pushDrillHistory();
+        }
+        currentSheetConfig = JSON.parse(JSON.stringify(cfg));
+        currentSortCol = null;
+        if (activeModule !== 'tables') {
+            switchModule('tables', false);
+        }
+        renderSidebarSheets();
+        executeInteractiveQuery();
+    }
+
+    // ==========================================
+    // DRILL-DOWN LOGIK & BREADCRUMB PFAD
+    // ==========================================
+    function pushDrillHistory() {
+        drillHistory.push({
+            mode: analysisMode,
+            sheetConfig: JSON.parse(JSON.stringify(currentSheetConfig)),
+            filters: JSON.parse(JSON.stringify(activeFilters))
+        });
+        updateBreadcrumbUI();
+    }
+
+    function popDrillHistory() {
+        if (drillHistory.length === 0) return;
+        const prev = drillHistory.pop();
+        analysisMode = prev.mode;
+        currentSheetConfig = prev.sheetConfig;
+        activeFilters = prev.filters;
+        document.getElementById('modeBtnUser').classList.toggle('active', analysisMode === 'user');
+        document.getElementById('modeBtnShared').classList.toggle('active', analysisMode === 'shared');
+        updateBreadcrumbUI();
+        renderSidebarSheets();
+        reloadCurrentModule();
+    }
+
+    function removeFilterAtIndex(idx) {
+        pushDrillHistory();
+        activeFilters.splice(idx, 1);
+        updateBreadcrumbUI();
+        reloadCurrentModule();
+    }
+
+    function clearAllFilters() {
+        pushDrillHistory();
+        activeFilters = [];
+        updateBreadcrumbUI();
+        reloadCurrentModule();
+    }
+
+    function addOrUpdateFilter(col, val, labelText) {
+        const existingIdx = activeFilters.findIndex(f => f.col === col && String(f.val) === String(val));
+        if (existingIdx === -1) {
+            activeFilters.push({ col, val, label: labelText });
+        }
+        updateBreadcrumbUI();
+    }
+
+    function updateBreadcrumbUI() {
+        const container = document.getElementById('drillBreadcrumb');
+        const backBtn = document.getElementById('btnBackHistory');
+        const clearBtn = document.getElementById('btnClearFilters');
+
+        backBtn.style.display = drillHistory.length > 0 ? 'inline-flex' : 'none';
+        clearBtn.style.display = activeFilters.length > 0 ? 'inline-flex' : 'none';
+
+        if (activeFilters.length === 0) {
+            container.innerHTML = `<strong>🧭 Drill-Down-Pfad:</strong> <span style="color:#666;">Alle Daten im Zeitraum (Klicke auf Zahlen oder Namen in der Tabelle zum Filtern)</span>`;
+            return;
+        }
+
+        let html = `<strong>🧭 Aktive Drill-Down-Filter:</strong> `;
+        activeFilters.forEach((f, idx) => {
+            if (idx > 0) html += `<span class="drill-arrow">➔</span>`;
+            html += `
+                <span class="filter-chip">
+                    ${escapeHtml(f.label)}
+                    <button type="button" onclick="removeFilterAtIndex(${idx})" title="Diesen Filter entfernen">✖</button>
+                </span>
+            `;
+        });
+        if (currentSheetConfig) {
+            html += `<span class="drill-arrow">➔</span> <strong style="color:var(--accent);">Ansicht: ${escapeHtml(currentSheetConfig.sheet_name)}</strong>`;
+        }
+        container.innerHTML = html;
+    }
+
+    // ==========================================
+    // HAUPT-ABFRAGE AN DAS BACKEND
+    // ==========================================
+    function executeInteractiveQuery() {
+        updateBreadcrumbUI();
+        const container = document.getElementById('tableContainer');
+        container.innerHTML = `<div style="padding: 40px; text-align: center; color: #666;"><div class="spinner"></div> Berechne Auswertung...</div>`;
+
+        const users = analysisMode === 'user' ? [getPrimaryUser()] : getSelectedUsers();
+        const payload = {
+            mode: analysisMode,
+            users: users,
+            start_date: document.getElementById('startDate').value,
+            end_date: document.getElementById('endDate').value,
+            sheet_config: currentSheetConfig,
+            filters: activeFilters
+        };
+
+        fetch('/api/interactive/query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.error) {
+                container.innerHTML = `<div style="padding:25px; color:var(--danger); font-weight:bold;">❌ Fehler: ${escapeHtml(data.error)}</div>`;
+                return;
+            }
+            lastQueryResult = data;
+            updateKpiRibbon(data.summary);
+            document.getElementById('currentSheetTitle').textContent = currentSheetConfig.sheet_name || 'Auswertung';
+            document.getElementById('currentSheetSubtitle').textContent =
+                `${data.rows.length} Einträge • User: ${users.join(', ')}` +
+                (activeFilters.length > 0 ? ` • ${activeFilters.length} aktive(r) Drill-Down-Filter` : '');
+
+            renderInteractiveTable(data);
+            if (document.getElementById('chartBox').style.display === 'block') {
+                populateChartMetrics(data);
+                updateInteractiveChart();
+            }
+        })
+        .catch(err => {
+            container.innerHTML = `<div style="padding:25px; color:var(--danger);">Netzwerkfehler: ${escapeHtml(String(err))}</div>`;
+        });
+    }
+
+    function updateKpiRibbon(sum) {
+        if (!sum) return;
+        document.getElementById('kpiTrips').textContent = sum.total_journeys ?? 0;
+        document.getElementById('kpiDist').textContent = `${(sum.total_distance_km ?? 0).toLocaleString('de-DE')} km`;
+        document.getElementById('kpiSpeed').textContent = `∅ ${sum.avg_speed_kmh ?? 0} km/h`;
+        document.getElementById('kpiTime').textContent = sum.total_duration_hhmm || '00:00';
+        document.getElementById('kpiDelay').textContent = `∅ Ankunftsversp.: ${sum.avg_arr_delay ?? 0} min`;
+        document.getElementById('kpiOperators').textContent = sum.unique_operators ?? 0;
+        document.getElementById('kpiLines').textContent = sum.unique_lines ?? 0;
+        document.getElementById('kpiStops').textContent = sum.unique_stops ?? 0;
+
+        // Hinweis-Banner bei 0 Fahrten ohne aktive Filter prüfen & umschalten
+        const banner = document.getElementById('noUserDataBanner');
+        if (banner) {
+            const hasNoJourneys = ((sum.total_journeys ?? 0) === 0);
+            const startVal = (document.getElementById('startDate').value || '').trim();
+            const endVal = (document.getElementById('endDate').value || '').trim();
+            const hasNoFilters = (activeFilters.length === 0 && !startVal && !endVal);
+
+            if (hasNoJourneys && hasNoFilters) {
+                banner.style.display = 'flex';
+                const users = analysisMode === 'user' ? [getPrimaryUser()] : getSelectedUsers();
+                const textEl = document.getElementById('noUserDataText');
+                if (textEl) {
+                    textEl.textContent = `Es wurden keine Daten für ${users.join(', ')} gefunden. Möglicherweise musst du die Daten erst einmal laden.`;
+                }
+            } else {
+                banner.style.display = 'none';
+            }
+        }
+    }
+
+    // ==========================================
+    // STICKY / PINNING MANAGEMENT (SPALTEN & ZEILEN)
+    // ==========================================
+    function getStickyStorageKey() {
+        const sName = (currentSheetConfig && currentSheetConfig.sheet_name) ? currentSheetConfig.sheet_name : 'default';
+        return 'traewelling_sticky_cfg_' + encodeURIComponent(sName);
+    }
+
+    function loadStickySettings(columns = []) {
+        const isMobile = window.innerWidth <= 900;
+        const key = getStickyStorageKey();
+        let loaded = null;
+        try {
+            const stored = localStorage.getItem(key);
+            if (stored) {
+                loaded = JSON.parse(stored);
+            }
+        } catch(e) {
+            console.warn('Error reading sticky settings:', e);
+        }
+
+        if (loaded) {
+            let savedOrder = Array.isArray(loaded.columnOrder) ? loaded.columnOrder.filter(c => columns.includes(c)) : [];
+            columns.forEach(c => {
+                if (!savedOrder.includes(c)) savedOrder.push(c);
+            });
+            currentStickySettings = {
+                colStickyEnabled: typeof loaded.colStickyEnabled === 'boolean' ? loaded.colStickyEnabled : !isMobile,
+                headerStickyEnabled: typeof loaded.headerStickyEnabled === 'boolean' ? loaded.headerStickyEnabled : true,
+                pinnedColumns: Array.isArray(loaded.pinnedColumns) ? loaded.pinnedColumns.filter(c => columns.includes(c)) : [],
+                columnOrder: savedOrder,
+                autoMovePinnedToFront: typeof loaded.autoMovePinnedToFront === 'boolean' ? loaded.autoMovePinnedToFront : true
+            };
+        } else {
+            currentStickySettings = {
+                colStickyEnabled: !isMobile,
+                headerStickyEnabled: true,
+                pinnedColumns: (!isMobile && columns.length > 0) ? [columns[0]] : [],
+                columnOrder: [...columns],
+                autoMovePinnedToFront: true
+            };
+        }
+    }
+
+    function getActiveOrderedColumns(rawCols) {
+        if (!rawCols || rawCols.length === 0) return [];
+        let order = (currentStickySettings.columnOrder && currentStickySettings.columnOrder.length > 0)
+            ? currentStickySettings.columnOrder.filter(c => rawCols.includes(c))
+            : [...rawCols];
+        rawCols.forEach(c => {
+            if (!order.includes(c)) order.push(c);
+        });
+
+        if (currentStickySettings.autoMovePinnedToFront && currentStickySettings.colStickyEnabled && currentStickySettings.pinnedColumns && currentStickySettings.pinnedColumns.length > 0) {
+            const pinned = currentStickySettings.pinnedColumns.filter(c => order.includes(c));
+            const unpinned = order.filter(c => !pinned.includes(c));
+            order = [...pinned, ...unpinned];
+        }
+        return order;
+    }
+
+    function saveStickySettings() {
+        try {
+            const key = getStickyStorageKey();
+            localStorage.setItem(key, JSON.stringify(currentStickySettings));
+        } catch(e) {
+            console.warn('Error saving sticky settings:', e);
+        }
+    }
+
+    function getRowUniqueKey(row, idx) {
+        if (!row) return String(idx);
+        if (row.statusId !== undefined && row.statusId !== null) return 'sid_' + row.statusId;
+        if (row.Link) return 'link_' + row.Link;
+        if (row.Haltestelle) return 'hst_' + row.Haltestelle;
+        const keys = Object.keys(row);
+        if (keys.length > 0) {
+            const firstFew = keys.slice(0, 3).map(k => `${k}:${row[k]}`).join('|');
+            return 'r_' + firstFew;
+        }
+        return String(idx);
+    }
+
+    function togglePinMenu(force, evt) {
+        if (force && typeof force.stopPropagation === 'function') {
+            force.stopPropagation();
+            force = undefined;
+        } else if (evt && typeof evt.stopPropagation === 'function') {
+            evt.stopPropagation();
+        }
+        const pop = document.getElementById('pinMenuPopover');
+        const backdrop = document.getElementById('pinMenuBackdrop');
+        if (!pop) return;
+        const isVisible = pop.style.display !== 'none';
+        const show = typeof force === 'boolean' ? force : !isVisible;
+        if (show) {
+            updatePinMenuUI();
+            const isMobile = window.innerWidth <= 900;
+            if (isMobile) {
+                pop.style.position = 'fixed';
+                pop.style.left = '10px';
+                pop.style.right = '10px';
+                pop.style.bottom = '12px';
+                pop.style.top = 'auto';
+                pop.style.width = 'auto';
+                pop.style.maxHeight = '78vh';
+                pop.style.zIndex = '3001';
+                if (backdrop) backdrop.style.display = 'block';
+            } else {
+                if (backdrop) backdrop.style.display = 'none';
+                const btn = document.getElementById('pinMenuBtn');
+                const popWidth = Math.min(360, window.innerWidth - 24);
+                let idealLeft = window.innerWidth - popWidth - 20;
+                let idealTop = 150;
+                if (btn) {
+                    const rect = btn.getBoundingClientRect();
+                    idealLeft = rect.right - popWidth;
+                    idealTop = rect.bottom + 6;
+                }
+                const clampedLeft = Math.max(12, Math.min(idealLeft, window.innerWidth - popWidth - 12));
+                pop.style.position = 'fixed';
+                pop.style.left = clampedLeft + 'px';
+                pop.style.right = 'auto';
+                pop.style.top = idealTop + 'px';
+                pop.style.bottom = 'auto';
+                pop.style.width = popWidth + 'px';
+                pop.style.maxHeight = '80vh';
+                pop.style.zIndex = '3001';
+            }
+            pop.style.display = 'block';
+        } else {
+            pop.style.display = 'none';
+            if (backdrop) backdrop.style.display = 'none';
+        }
+    }
+
+    function updatePinMenuUI() {
+        const masterToggle = document.getElementById('pinColMasterToggle');
+        const autoMoveToggle = document.getElementById('pinAutoMoveToggle');
+        const headerToggle = document.getElementById('pinHeaderToggle');
+        const listCont = document.getElementById('pinColListContainer');
+        const rowCountLabel = document.getElementById('pinnedRowsCountLabel');
+
+        if (masterToggle) masterToggle.checked = Boolean(currentStickySettings.colStickyEnabled);
+        if (autoMoveToggle) autoMoveToggle.checked = currentStickySettings.autoMovePinnedToFront !== false;
+        if (headerToggle) headerToggle.checked = currentStickySettings.headerStickyEnabled !== false;
+        if (rowCountLabel) rowCountLabel.textContent = `${pinnedRowKeys.size} Datenzeilen angeheftet`;
+
+        if (listCont && lastQueryResult && lastQueryResult.columns) {
+            const rawCols = lastQueryResult.columns;
+            const orderedCols = getActiveOrderedColumns(rawCols);
+            let html = '';
+            orderedCols.forEach((col, idx) => {
+                const isPinned = Boolean(currentStickySettings.colStickyEnabled && currentStickySettings.pinnedColumns.includes(col));
+                html += `
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; padding:3px 0; border-bottom:1px solid #f1f5f9;">
+                        <label style="display:flex; align-items:center; gap:6px; font-size:12px; cursor:pointer; min-width:0; flex:1; margin:0;" title="${escapeHtml(col)}">
+                            <input type="checkbox" ${isPinned ? 'checked' : ''} onchange="toggleColumnPinCheckbox('${escapeHtml(col)}', this.checked)">
+                            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; ${isPinned ? 'font-weight:600; color:var(--primary);' : ''}">${escapeHtml(col)}</span>
+                        </label>
+                        <div style="display:flex; gap:3px; flex-shrink:0;">
+                            <button type="button" class="btn btn-sm" style="padding:1px 5px; font-size:11px; line-height:1.2; background:#f1f5f9; border:1px solid #cbd5e1; color:#333;" onclick="moveColumnToTop('${escapeHtml(col)}')" title="Ganz nach vorne schieben" ${idx === 0 ? 'disabled' : ''}>⇤</button>
+                            <button type="button" class="btn btn-sm" style="padding:1px 4px; font-size:11px; line-height:1.2; background:#f1f5f9; border:1px solid #cbd5e1; color:#333;" onclick="moveColumnUp('${escapeHtml(col)}')" title="Nach links / vorne" ${idx === 0 ? 'disabled' : ''}>⬆️</button>
+                            <button type="button" class="btn btn-sm" style="padding:1px 4px; font-size:11px; line-height:1.2; background:#f1f5f9; border:1px solid #cbd5e1; color:#333;" onclick="moveColumnDown('${escapeHtml(col)}')" title="Nach rechts / hinten" ${idx === orderedCols.length - 1 ? 'disabled' : ''}>⬇️</button>
+                        </div>
+                    </div>
+                `;
+            });
+            listCont.innerHTML = html || '<div style="color:#888; font-size:12px;">Keine Spalten vorhanden.</div>';
+        }
+        updatePinCounterBadge();
+    }
+
+    function moveColumnToTop(colName) {
+        const rawCols = lastQueryResult ? lastQueryResult.columns : [];
+        let order = getActiveOrderedColumns(rawCols);
+        const idx = order.indexOf(colName);
+        if (idx <= 0) return;
+
+        const isPinned = currentStickySettings.pinnedColumns.includes(colName);
+        if (currentStickySettings.autoMovePinnedToFront && currentStickySettings.colStickyEnabled) {
+            if (isPinned) {
+                const pIdx = currentStickySettings.pinnedColumns.indexOf(colName);
+                if (pIdx > 0) {
+                    currentStickySettings.pinnedColumns.splice(pIdx, 1);
+                    currentStickySettings.pinnedColumns.unshift(colName);
+                }
+                const cIdx = currentStickySettings.columnOrder.indexOf(colName);
+                if (cIdx > 0) {
+                    currentStickySettings.columnOrder.splice(cIdx, 1);
+                    currentStickySettings.columnOrder.unshift(colName);
+                }
+            } else {
+                const pinnedCount = currentStickySettings.pinnedColumns.filter(c => order.includes(c)).length;
+                order.splice(idx, 1);
+                order.splice(pinnedCount, 0, colName);
+                currentStickySettings.columnOrder = order;
+            }
+        } else {
+            order.splice(idx, 1);
+            order.unshift(colName);
+            currentStickySettings.columnOrder = order;
+        }
+        saveStickySettings();
+        if (lastQueryResult) renderInteractiveTable(lastQueryResult);
+        updatePinMenuUI();
+    }
+
+    function moveColumnUp(colName) {
+        const rawCols = lastQueryResult ? lastQueryResult.columns : [];
+        let order = getActiveOrderedColumns(rawCols);
+        const idx = order.indexOf(colName);
+        if (idx <= 0) return;
+
+        const prevCol = order[idx - 1];
+        order[idx - 1] = colName;
+        order[idx] = prevCol;
+
+        const pIdx1 = currentStickySettings.pinnedColumns.indexOf(colName);
+        const pIdx2 = currentStickySettings.pinnedColumns.indexOf(prevCol);
+        if (pIdx1 >= 0 && pIdx2 >= 0) {
+            currentStickySettings.pinnedColumns[pIdx1] = prevCol;
+            currentStickySettings.pinnedColumns[pIdx2] = colName;
+        }
+        currentStickySettings.columnOrder = order;
+        saveStickySettings();
+        if (lastQueryResult) renderInteractiveTable(lastQueryResult);
+        updatePinMenuUI();
+    }
+
+    function moveColumnDown(colName) {
+        const rawCols = lastQueryResult ? lastQueryResult.columns : [];
+        let order = getActiveOrderedColumns(rawCols);
+        const idx = order.indexOf(colName);
+        if (idx < 0 || idx >= order.length - 1) return;
+
+        const nextCol = order[idx + 1];
+        order[idx + 1] = colName;
+        order[idx] = nextCol;
+
+        const pIdx1 = currentStickySettings.pinnedColumns.indexOf(colName);
+        const pIdx2 = currentStickySettings.pinnedColumns.indexOf(nextCol);
+        if (pIdx1 >= 0 && pIdx2 >= 0) {
+            currentStickySettings.pinnedColumns[pIdx1] = nextCol;
+            currentStickySettings.pinnedColumns[pIdx2] = colName;
+        }
+        currentStickySettings.columnOrder = order;
+        saveStickySettings();
+        if (lastQueryResult) renderInteractiveTable(lastQueryResult);
+        updatePinMenuUI();
+    }
+
+    function resetColumnOrder() {
+        if (!lastQueryResult || !lastQueryResult.columns) return;
+        currentStickySettings.columnOrder = [...lastQueryResult.columns];
+        saveStickySettings();
+        if (lastQueryResult) renderInteractiveTable(lastQueryResult);
+        updatePinMenuUI();
+    }
+
+    function handleAutoMovePinnedToggle(checked) {
+        currentStickySettings.autoMovePinnedToFront = checked;
+        saveStickySettings();
+        if (lastQueryResult) renderInteractiveTable(lastQueryResult);
+        updatePinMenuUI();
+    }
+
+    function updatePinCounterBadge() {
+        const badge = document.getElementById('pinCounterBadge');
+        if (!badge) return;
+        const colCount = (currentStickySettings.colStickyEnabled && currentStickySettings.pinnedColumns) ? currentStickySettings.pinnedColumns.length : 0;
+        const rowCount = pinnedRowKeys.size;
+        const total = colCount + rowCount;
+        if (total > 0) {
+            badge.textContent = total;
+            badge.style.display = 'inline-block';
+        } else {
+            badge.style.display = 'none';
+        }
+    }
+
+    function handlePinColMasterToggle(checked) {
+        currentStickySettings.colStickyEnabled = checked;
+        if (checked && currentStickySettings.pinnedColumns.length === 0 && lastQueryResult && lastQueryResult.columns.length > 0) {
+            currentStickySettings.pinnedColumns = [lastQueryResult.columns[0]];
+        }
+        saveStickySettings();
+        if (lastQueryResult) renderInteractiveTable(lastQueryResult);
+        updatePinMenuUI();
+    }
+
+    function handlePinHeaderToggle(checked) {
+        currentStickySettings.headerStickyEnabled = checked;
+        saveStickySettings();
+        updatePinMenuUI();
+        applyStickyLayout();
+    }
+
+    function toggleColumnPinCheckbox(colName, checked) {
+        const idx = currentStickySettings.pinnedColumns.indexOf(colName);
+        if (checked && idx === -1) {
+            currentStickySettings.pinnedColumns.push(colName);
+            if (!currentStickySettings.colStickyEnabled) currentStickySettings.colStickyEnabled = true;
+        } else if (!checked && idx >= 0) {
+            currentStickySettings.pinnedColumns.splice(idx, 1);
+        }
+        saveStickySettings();
+        if (lastQueryResult) renderInteractiveTable(lastQueryResult);
+        updatePinMenuUI();
+    }
+
+    function clearAllPinnedColumns() {
+        currentStickySettings.pinnedColumns = [];
+        saveStickySettings();
+        if (lastQueryResult) renderInteractiveTable(lastQueryResult);
+        updatePinMenuUI();
+    }
+
+    function toggleColumnPinDirect(event, colName) {
+        if (event) event.stopPropagation();
+        if (!currentStickySettings.colStickyEnabled) {
+            currentStickySettings.colStickyEnabled = true;
+        }
+        const idx = currentStickySettings.pinnedColumns.indexOf(colName);
+        if (idx >= 0) {
+            currentStickySettings.pinnedColumns.splice(idx, 1);
+        } else {
+            currentStickySettings.pinnedColumns.push(colName);
+        }
+        saveStickySettings();
+        if (lastQueryResult) renderInteractiveTable(lastQueryResult);
+        updatePinMenuUI();
+    }
+
+    function toggleRowPin(event, rowKey) {
+        if (event) event.stopPropagation();
+        if (pinnedRowKeys.has(rowKey)) {
+            pinnedRowKeys.delete(rowKey);
+        } else {
+            pinnedRowKeys.add(rowKey);
+        }
+        if (lastQueryResult) renderInteractiveTable(lastQueryResult);
+        updatePinMenuUI();
+    }
+
+    function unpinAllRows() {
+        pinnedRowKeys.clear();
+        if (lastQueryResult) renderInteractiveTable(lastQueryResult);
+        updatePinMenuUI();
+    }
+
+    function applyStickyLayout() {
+        const table = document.querySelector('table.interactive-table');
+        if (!table) return;
+
+        const thead = table.querySelector('thead');
+        const theadRow = thead ? thead.querySelector('tr') : null;
+        const theadThs = theadRow ? Array.from(theadRow.children) : [];
+        const tbody = table.querySelector('tbody');
+        if (!thead || !tbody || theadThs.length === 0) return;
+
+        // 1. Header Sticky Status
+        const isHeaderSticky = currentStickySettings.headerStickyEnabled !== false;
+        if (isHeaderSticky) {
+            table.classList.remove('no-sticky-header');
+        } else {
+            table.classList.add('no-sticky-header');
+        }
+
+        // 2. Column Sticky Status
+        const isColSticky = Boolean(currentStickySettings.colStickyEnabled && currentStickySettings.pinnedColumns && currentStickySettings.pinnedColumns.length > 0);
+
+        const pinnedIndices = new Set();
+        if (isColSticky) {
+            // Pin column (index 0) is sticky if columns are pinned
+            pinnedIndices.add(0);
+            theadThs.forEach((th, idx) => {
+                if (idx === 0) return;
+                const cName = th.dataset.colName;
+                if (cName && currentStickySettings.pinnedColumns.includes(cName)) {
+                    pinnedIndices.add(idx);
+                }
+            });
+        }
+
+        const sortedPinnedIndices = Array.from(pinnedIndices).sort((a, b) => a - b);
+        const lastPinnedColIdx = sortedPinnedIndices.length > 0 ? sortedPinnedIndices[sortedPinnedIndices.length - 1] : -1;
+
+        // Calculate left offsets
+        const leftOffsets = {};
+        let cumLeft = 0;
+        sortedPinnedIndices.forEach(idx => {
+            leftOffsets[idx] = cumLeft;
+            const th = theadThs[idx];
+            const w = th ? th.getBoundingClientRect().width : 34;
+            cumLeft += w;
+        });
+
+        // Update thead TH cells
+        theadThs.forEach((th, idx) => {
+            const pinBtn = th.querySelector('.th-pin-btn');
+            const cName = th.dataset.colName;
+            const isPinned = currentStickySettings.pinnedColumns.includes(cName);
+            if (pinBtn) {
+                pinBtn.classList.toggle('active', isPinned);
+                pinBtn.title = isPinned ? 'Spalte lösen' : 'Spalte anheften';
+            }
+
+            if (pinnedIndices.has(idx)) {
+                th.classList.add('sticky-col');
+                th.style.left = leftOffsets[idx] + 'px';
+                th.classList.toggle('sticky-col-last', idx === lastPinnedColIdx);
+            } else {
+                th.classList.remove('sticky-col', 'sticky-col-last');
+                th.style.left = '';
+            }
+        });
+
+        // 3. Pinned rows and body cells
+        const theadHeight = isHeaderSticky ? thead.getBoundingClientRect().height : 0;
+        let cumTop = theadHeight;
+
+        const bodyRows = Array.from(tbody.querySelectorAll('tr'));
+        bodyRows.forEach(tr => {
+            const isRowPinned = tr.classList.contains('pinned-row');
+            const cells = Array.from(tr.children);
+            const rowHeight = isRowPinned ? tr.getBoundingClientRect().height : 0;
+
+            cells.forEach((cell, cIdx) => {
+                // Vertical sticky
+                if (isRowPinned) {
+                    cell.style.top = cumTop + 'px';
+                } else {
+                    cell.style.top = '';
+                }
+
+                // Horizontal sticky
+                if (pinnedIndices.has(cIdx)) {
+                    cell.classList.add('sticky-col');
+                    cell.style.left = leftOffsets[cIdx] + 'px';
+                    cell.classList.toggle('sticky-col-last', cIdx === lastPinnedColIdx);
+                } else {
+                    cell.classList.remove('sticky-col', 'sticky-col-last');
+                    cell.style.left = '';
+                }
+            });
+
+            if (isRowPinned) {
+                cumTop += rowHeight;
+            }
+        });
+
+        updatePinCounterBadge();
+    }
+
+    // ==========================================
+    // INTERAKTIVES TABELLEN-RENDERING & DRILL-DOWN
+    // ==========================================
+    function renderInteractiveTable(data) {
+        const container = document.getElementById('tableContainer');
+        const rawCols = data.columns || [];
+        let rows = [...(data.rows || [])];
+
+        if (rows.length === 0) {
+            container.innerHTML = `<div style="padding: 35px; text-align: center; color: #777;">Keine Fahrten oder Daten für diese Filter-Kombination gefunden.</div>`;
+            return;
+        }
+
+        // Sticky settings für dieses Blatt laden falls noch nicht geladen
+        const sheetName = (currentSheetConfig && currentSheetConfig.sheet_name) ? currentSheetConfig.sheet_name : 'default';
+        if (currentStickySheetName !== sheetName) {
+            loadStickySettings(rawCols);
+            currentStickySheetName = sheetName;
+            pinnedRowKeys.clear();
+        }
+
+        // Spalten in aktiver/angepasster Reihenfolge
+        const cols = getActiveOrderedColumns(rawCols);
+
+        // Clientseitige Suchfilterung
+        const searchQ = (document.getElementById('tableSearchInput').value || '').toLowerCase().trim();
+        if (searchQ) {
+            rows = rows.filter(r => cols.some(c => String(r[c] ?? '').toLowerCase().includes(searchQ)));
+        }
+
+        // Clientseitige Spaltensortierung
+        if (currentSortCol && cols.includes(currentSortCol)) {
+            rows.sort((a, b) => {
+                let vA = a[currentSortCol];
+                let vB = b[currentSortCol];
+                const numA = parseFloat(String(vA).replace(',', '.'));
+                const numB = parseFloat(String(vB).replace(',', '.'));
+                if (!isNaN(numA) && !isNaN(numB) && String(vA).match(/^-?\d+(\.\d+)?$/)) {
+                    return currentSortAsc ? numA - numB : numB - numA;
+                }
+                return currentSortAsc
+                    ? String(vA ?? '').localeCompare(String(vB ?? ''), 'de')
+                    : String(vB ?? '').localeCompare(String(vA ?? ''), 'de');
+            });
+        }
+
+        // Aufteilung in angeheftete und normale Zeilen (angeheftete Zeilen oben)
+        const pinnedList = [];
+        const unpinnedList = [];
+        rows.forEach((r, idx) => {
+            const rKey = getRowUniqueKey(r, idx);
+            if (pinnedRowKeys.has(rKey)) {
+                pinnedList.push({ row: r, key: rKey, isPinned: true });
+            } else {
+                unpinnedList.push({ row: r, key: rKey, isPinned: false });
+            }
+        });
+        const combinedRows = [...pinnedList, ...unpinnedList];
+
+        const stype = data.sheet_type;
+        const groupArgs = data.group_args || []; // z.B. ['category']
+        const groupLabels = data.group_labels || []; // z.B. ['Kategorie']
+
+        let html = `<table class="interactive-table"><thead><tr>`;
+        // Erste Spalte: Zeilen-Pin Spalte
+        html += `<th class="th-pin-col" style="width:34px; min-width:34px; max-width:34px; text-align:center; padding: 6px 2px;" title="Zeilen anheften">📌</th>`;
+
+        cols.forEach(c => {
+            const sortIcon = currentSortCol === c ? (currentSortAsc ? ' ▲' : ' ▼') : '';
+            const isColPinned = currentStickySettings.colStickyEnabled && currentStickySettings.pinnedColumns.includes(c);
+            html += `
+                <th onclick="sortTableByColumn('${escapeHtml(c)}')" data-col-name="${escapeHtml(c)}" title="Klicken zum Sortieren">
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
+                        <span style="overflow:hidden; text-overflow:ellipsis;">${escapeHtml(c)}${sortIcon}</span>
+                        <button type="button" class="th-pin-btn ${isColPinned ? 'active' : ''}" onclick="toggleColumnPinDirect(event, '${escapeHtml(c)}')" title="${isColPinned ? 'Spalte lösen' : 'Spalte anheften'}">📌</button>
+                    </div>
+                </th>
+            `;
+        });
+        html += `</tr></thead><tbody>`;
+
+        combinedRows.forEach(item => {
+            const row = item.row;
+            const rKey = item.key;
+            const isRowPinned = item.isPinned;
+            html += `<tr class="${isRowPinned ? 'pinned-row' : ''}" data-row-key="${escapeHtml(rKey)}">`;
+            // Erste Zelle: Zeilen-Pin Button
+            html += `
+                <td class="td-pin-col" style="width:34px; min-width:34px; max-width:34px; text-align:center; padding: 6px 2px;">
+                    <button type="button" class="row-pin-btn ${isRowPinned ? 'active' : ''}" onclick="toggleRowPin(event, '${escapeHtml(rKey)}')" title="${isRowPinned ? 'Zeile lösen' : 'Zeile oben anheften'}">📌</button>
+                </td>
+            `;
+
+            cols.forEach((colName, cIdx) => {
+                const rawVal = row[colName];
+                const dispVal = rawVal === null || rawVal === undefined ? '' : String(rawVal);
+
+                html += `<td>${formatInteractiveCell(stype, colName, dispVal, row, groupArgs, groupLabels, cIdx)}</td>`;
+            });
+            html += `</tr>`;
+        });
+
+        html += `</tbody></table>`;
+        container.innerHTML = html;
+
+        applyStickyLayout();
+        updatePinMenuUI();
+    }
+
+    function formatInteractiveCell(stype, colName, dispVal, row, groupArgs, groupLabels, cIdx) {
+        if (dispVal === '') return '';
+
+        const hyperlinkMatch = dispVal.match(/^=HYPERLINK\("([^"]+)",\s*"([^"]+)"\)$/i);
+        if (hyperlinkMatch) {
+            const url = hyperlinkMatch[1];
+            const label = hyperlinkMatch[2];
+            if (stype === 'meta' && row['Label'] === 'Profilbild') {
+                return `
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <img src="${escapeHtml(url)}" alt="Profilbild" style="width:34px; height:34px; border-radius:50%; object-fit:cover; border:1px solid #cbd5e1;" onerror="this.style.display='none'">
+                        <a href="${escapeHtml(url)}" target="_blank" rel="noopener" style="color:var(--primary); font-weight:600; text-decoration:underline;">🔗 Profilbild öffnen</a>
+                    </div>
+                `;
+            }
+            if ((stype === 'journeys' || stype === 'shared_journeys') && colName === 'Link') {
+                const m = url.match(/status\/(\d+)/);
+                if (m) {
+                    const sid = m[1];
+                    return `
+                        <div style="display:flex; gap:5px;">
+                            <button type="button" class="btn btn-sm" style="padding:3px 8px; font-size:11px;" onclick="openStatusInspector(${sid})">🔎 Details #${sid}</button>
+                            <a href="https://traewelling.de/status/${sid}" target="_blank" rel="noopener" class="btn btn-sm btn-outline" style="padding:3px 7px; font-size:11px;">↗ Träwelling</a>
+                        </div>
+                    `;
+                }
+            }
+            return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" style="color:var(--primary); font-weight:600; text-decoration:underline;">🔗 ${escapeHtml(label)}</a>`;
+        }
+
+        if (stype === 'meta' && colName === 'Wert' && row['Label'] === 'Datenstand') {
+            const dt = new Date(dispVal);
+            if (!isNaN(dt.getTime())) {
+                return escapeHtml(dt.toLocaleString('de-DE', {
+                    day: '2-digit', month: '2-digit', year: 'numeric',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit'
+                }) + ' Uhr');
+            }
+        }
+
+        // 1. Fahrtenliste: Link / Status-Inspektor
+        if ((stype === 'journeys' || stype === 'shared_journeys') && colName === 'Link') {
+            const m = dispVal.match(/status\/(\d+)/);
+            if (m) {
+                const sid = m[1];
+                return `
+                    <div style="display:flex; gap:5px;">
+                        <button type="button" class="btn btn-sm" style="padding:3px 8px; font-size:11px;" onclick="openStatusInspector(${sid})">🔎 Details #${sid}</button>
+                        <a href="https://traewelling.de/status/${sid}" target="_blank" class="btn btn-sm btn-outline" style="padding:3px 7px; font-size:11px;">↗ Träwelling</a>
+                    </div>
+                `;
+            }
+        }
+
+        // 2. Gruppierte Tabellen (User & Shared): Gruppen-Schlüsselspalten (z. B. Kategorie = Fernverkehr)
+        if ((stype === 'grouped' || stype === 'shared_grouped') && groupLabels.includes(colName)) {
+            const rowFilters = extractRowGroupFilters(row, groupArgs, groupLabels);
+            const encFilters = encodeURIComponent(JSON.stringify(rowFilters));
+            return `<span class="group-cell-btn" onclick="openDrillPopover(event, '${encFilters}', '${escapeHtml(dispVal)}')" title="Klicken für Drill-Down-Optionen zu '${escapeHtml(dispVal)}'">🔍 ${escapeHtml(dispVal)} ▾</span>`;
+        }
+
+        // 3. Gruppierte & Zeitliche Tabellen: Klickbare Metrik-Zahlen (Betreiber, Linien, Fahrten, Tage, Haltestellen)
+        if (stype === 'grouped' || stype === 'shared_grouped' || stype === 'temporal') {
+            const rowFilters = stype === 'temporal'
+                ? [{ col: `temporal_${currentSheetConfig.grouping_type || 'weekday'}`, val: row[Object.keys(row)[0]], label: `${Object.keys(row)[0]}: ${row[Object.keys(row)[0]]}` }]
+                : extractRowGroupFilters(row, groupArgs, groupLabels);
+
+            // Wenn in Shared-Grouped ein User in der Zeile steht, diesen ebenfalls mitgeben
+            if (stype === 'shared_grouped' && row['User']) {
+                rowFilters.push({ col: 'username', val: row['User'], label: `User: ${row['User']}` });
+            }
+
+            const encFilters = encodeURIComponent(JSON.stringify(rowFilters));
+            const numVal = parseInt(dispVal, 10);
+
+            if (!isNaN(numVal) && numVal > 0) {
+                if (colName === 'Betreiber') {
+                    return `<span class="drill-metric-pill" onclick="drillToTarget('${encFilters}', 'grouped', ['operatorName'], 'Betreiber')" title="Klicken, um diese ${numVal} Betreiber und ihre Statistiken anzuzeigen">${numVal} 🏢</span>`;
+                }
+                if (colName === 'Linien') {
+                    return `<span class="drill-metric-pill" onclick="drillToTarget('${encFilters}', 'grouped', ['operatorName', 'lineName'], 'Linien')" title="Klicken, um diese ${numVal} Linien und ihre Statistiken anzuzeigen">${numVal} 🛤️</span>`;
+                }
+                if (colName === 'Fahrten') {
+                    return `<span class="drill-metric-pill" onclick="drillToTarget('${encFilters}', 'journeys', [], 'Fahrtenliste')" title="Klicken, um diese ${numVal} Einzelfahrten aufzulisten">${numVal} 🚆</span>`;
+                }
+                if (colName === 'Haltestellen') {
+                    return `<span class="drill-metric-pill" onclick="drillToTarget('${encFilters}', 'stops', [], 'Haltestellen')" title="Klicken, um diese ${numVal} Haltestellen anzuzeigen">${numVal} 🚏</span>`;
+                }
+                if (colName === 'Tage') {
+                    return `<span class="drill-metric-pill" onclick="drillToTarget('${encFilters}', 'grouped', ['date_planned'], 'Kalendertage')" title="Klicken, um diese ${numVal} Reisetage aufzuschlüsseln">${numVal} 📅</span>`;
+                }
+            }
+
+            // Klickbare Verspätungs-Prozentwerte
+            const pctVal = parseFloat(dispVal);
+            if (!isNaN(pctVal) && pctVal > 0) {
+                if (colName === 'Verfrüht (%)') return `<span class="drill-delay-pill" onclick="drillToDelayFromRow('${encFilters}', 'early', 'Verfrüht')">${escapeHtml(dispVal)}% 🔍</span>`;
+                if (colName === 'Pünktlich (%)') return `<span class="drill-delay-pill" onclick="drillToDelayFromRow('${encFilters}', 'ontime', 'Pünktlich')">${escapeHtml(dispVal)}% 🔍</span>`;
+                if (colName === '3 Minuten und mehr (%)') return `<span class="drill-delay-pill" onclick="drillToDelayFromRow('${encFilters}', 'del_3', '>= 3 Min Versp.')">${escapeHtml(dispVal)}% 🔍</span>`;
+                if (colName === '6 Minuten und mehr (%)') return `<span class="drill-delay-pill" onclick="drillToDelayFromRow('${encFilters}', 'del_6', '>= 6 Min Versp.')">${escapeHtml(dispVal)}% 🔍</span>`;
+                if (colName === '15 Minuten und mehr (%)') return `<span class="drill-delay-pill" onclick="drillToDelayFromRow('${encFilters}', 'del_15', '>= 15 Min Versp.')">${escapeHtml(dispVal)}% 🔍</span>`;
+                if (colName === '60 Minuten und mehr (%)') return `<span class="drill-delay-pill" onclick="drillToDelayFromRow('${encFilters}', 'del_60', '>= 60 Min Versp.')">${escapeHtml(dispVal)}% 🔍</span>`;
+            }
+        }
+
+        // 4. Zeitliche Tabellen: Erste Spalte (Zeitfenster / Wochentag / Monat / Jahr)
+        if (stype === 'temporal' && cIdx === 0) {
+            const gType = currentSheetConfig.grouping_type || 'weekday';
+            const rowFilters = [{ col: `temporal_${gType}`, val: dispVal, label: `${colName}: ${dispVal}` }];
+            const encFilters = encodeURIComponent(JSON.stringify(rowFilters));
+            return `<span class="group-cell-btn" onclick="openDrillPopover(event, '${encFilters}', '${escapeHtml(dispVal)}')">🕒 ${escapeHtml(dispVal)} ▾</span>`;
+        }
+
+        // 5. Haltestellen-Tabellen (ohne & mit Via)
+        if (stype === 'stops' || stype === 'stops_via' || stype === 'shared_stops') {
+            const stopCol = Object.keys(row).find(k => k.startsWith('Haltestelle'));
+            const stopName = row[stopCol];
+            if (stopName && colName.startsWith('Haltestelle')) {
+                const colKey = stype === 'stops_via' ? 'any_stop_via' : 'any_stop';
+                const rowFilters = [{ col: colKey, val: stopName, label: `Hst.: ${stopName}` }];
+                const encFilters = encodeURIComponent(JSON.stringify(rowFilters));
+                return `<span class="group-cell-btn" onclick="openDrillPopover(event, '${encFilters}', '${escapeHtml(stopName)}')">🚏 ${escapeHtml(stopName)} ▾</span>`;
+            }
+            if (stopName && (colName === 'Besuche' || colName === 'Ohne Via')) {
+                const rowFilters = [{ col: 'any_stop', val: stopName, label: `Start/Ziel: ${stopName}` }];
+                const encFilters = encodeURIComponent(JSON.stringify(rowFilters));
+                return `<span class="drill-metric-pill" onclick="drillToTarget('${encFilters}', 'journeys', [], 'Fahrten (${escapeHtml(stopName)})')">${escapeHtml(dispVal)} 🚆</span>`;
+            }
+            if (stopName && (colName === 'insgesamt' || colName === 'Nur Via')) {
+                const rowFilters = [{ col: 'any_stop_via', val: stopName, label: `Hst. (inkl. Via): ${stopName}` }];
+                const encFilters = encodeURIComponent(JSON.stringify(rowFilters));
+                return `<span class="drill-metric-pill" onclick="drillToTarget('${encFilters}', 'journeys', [], 'Fahrten inkl. Via (${escapeHtml(stopName)})')">${escapeHtml(dispVal)} 🚉</span>`;
+            }
+        }
+
+        // 6. Geografie-Tabellen (Länder, Städte, Bundesländer, Kreise)
+        if (stype === 'geo') {
+            const geoKey = currentSheetConfig.geo_column || 'countryName';
+            const firstCol = Object.keys(row).find(k => k !== 'Platz' && k !== 'Besuche');
+            const placeName = row[firstCol];
+            if (placeName && colName === firstCol) {
+                const rowFilters = [{ col: `geo_${geoKey}`, val: placeName, label: `${geoColumns[geoKey] || geoKey}: ${placeName}` }];
+                const encFilters = encodeURIComponent(JSON.stringify(rowFilters));
+                return `<span class="group-cell-btn" onclick="openDrillPopover(event, '${encFilters}', '${escapeHtml(placeName)}')">🌍 ${escapeHtml(placeName)} ▾</span>`;
+            }
+            if (placeName && colName === 'Besuche') {
+                const rowFilters = [{ col: `geo_${geoKey}`, val: placeName, label: `${geoColumns[geoKey] || geoKey}: ${placeName}` }];
+                const encFilters = encodeURIComponent(JSON.stringify(rowFilters));
+                return `<span class="drill-metric-pill" onclick="drillToTarget('${encFilters}', 'stops', [], 'Haltestellen in ${escapeHtml(placeName)}')">${escapeHtml(dispVal)} 🚏</span>`;
+            }
+        }
+
+        // 7. Allgemeine Statistik-Tabelle (Zeilen-Drill-Down)
+        if (stype === 'stats' && colName === 'Gesamtwert') {
+            const mName = row['Metrik'];
+            if (mName === 'Fahrten') return `<span class="drill-metric-pill" onclick="quickJumpToSheet('journeys')">${escapeHtml(dispVal)} 🔍</span>`;
+            if (mName === 'Linien') return `<span class="drill-metric-pill" onclick="quickJumpToGrouped2('operatorName', 'lineName', 'Linien')">${escapeHtml(dispVal)} 🔍</span>`;
+            if (mName === 'Betreiber') return `<span class="drill-metric-pill" onclick="quickJumpToGrouped('operatorName', 'Betreiber')">${escapeHtml(dispVal)} 🔍</span>`;
+            if (mName === 'Haltestellen') return `<span class="drill-metric-pill" onclick="quickJumpToSheet('stops')">${escapeHtml(dispVal)} 🔍</span>`;
+            if (mName === 'Tage') return `<span class="drill-metric-pill" onclick="quickJumpToGrouped('date_planned', 'Kalendertage')">${escapeHtml(dispVal)} 🔍</span>`;
+        }
+
+        // 8. Fahrtenliste: Klickbare Zellen für Linie, Kategorie, Betreiber, Start, Ziel
+        if (stype === 'journeys') {
+            const mapCols = {
+                'Kategorie': 'category',
+                'Betreiber': 'operatorName',
+                'Linie': 'lineName',
+                'Abfahrtshaltestelle': 'origin.stopName',
+                'Zielstation': 'destination.stopName',
+                'Fahrzeugnummer': 'vehicleNumber',
+                'Grund': 'business'
+            };
+            if (mapCols[colName]) {
+                const fKey = mapCols[colName];
+                const rf = encodeURIComponent(JSON.stringify([{ col: fKey, val: dispVal, label: `${colName}: ${dispVal}` }]));
+                return `<span style="cursor:pointer; border-bottom:1px dotted var(--primary);" onclick="openDrillPopover(event, '${rf}', '${escapeHtml(dispVal)}')" title="Klicken zum Filtern nach ${escapeHtml(dispVal)}">${escapeHtml(dispVal)}</span>`;
+            }
+        }
+
+        return escapeHtml(dispVal);
+    }
+
+    function extractRowGroupFilters(row, groupArgs, groupLabels) {
+        const filters = [];
+        for (let i = 0; i < groupArgs.length; i++) {
+            const argKey = groupArgs[i];
+            const lbl = groupLabels[i] || argKey;
+            const val = row[lbl];
+            if (val !== undefined && val !== '') {
+                filters.push({ col: argKey, val: val, label: `${lbl}: ${val}` });
+            }
+        }
+        return filters;
+    }
+
+    // Direkter Drill-Down bei Klick auf eine Zahl (z. B. "5 Betreiber" unter "Fernverkehr")
+    function drillToTarget(encodedRowFilters, targetType, targetArgs, targetTitle) {
+        const newFilters = JSON.parse(decodeURIComponent(encodedRowFilters));
+        pushDrillHistory();
+
+        newFilters.forEach(f => {
+            if (f.col === 'username') {
+                // Bei Wechsel aus Team-Ansicht auf einzelnen User
+                analysisMode = 'user';
+                document.getElementById('modeBtnUser').classList.add('active');
+                document.getElementById('modeBtnShared').classList.remove('active');
+                const pSel = document.getElementById('primaryUserSelect');
+                if (pSel) pSel.value = f.val;
+            } else {
+                addOrUpdateFilter(f.col, f.val, f.label);
+            }
+        });
+
+        let nextCfg = {
+            sheet_name: targetTitle,
+            type: analysisMode === 'shared' && targetType === 'grouped' ? 'shared_grouped' : targetType,
+            args: targetArgs,
+            sort_by_distance: true,
+            exclude_empty: false
+        };
+        selectSheetConfig(nextCfg, false);
+    }
+
+    function drillToDelayFromRow(encodedRowFilters, bucketKey, bucketLabel) {
+        const newFilters = JSON.parse(decodeURIComponent(encodedRowFilters));
+        pushDrillHistory();
+        newFilters.forEach(f => addOrUpdateFilter(f.col, f.val, f.label));
+        addOrUpdateFilter('delay_bucket', bucketKey, `Verspätung: ${bucketLabel}`);
+        selectSheetConfig({ sheet_name: `Fahrtenliste (${bucketLabel})`, type: 'journeys' }, false);
+    }
+
+    function drillByDelayBucket(bucketKey, bucketLabel) {
+        pushDrillHistory();
+        addOrUpdateFilter('delay_bucket', bucketKey, `Verspätung: ${bucketLabel}`);
+        selectSheetConfig({ sheet_name: `Fahrtenliste (${bucketLabel})`, type: 'journeys' }, false);
+    }
+
+    // ==========================================
+    // POPOVER KONTEXT-MENÜ
+    // ==========================================
+    function openDrillPopover(evt, encodedFilters, title) {
+        evt.stopPropagation();
+        popoverContext = JSON.parse(decodeURIComponent(encodedFilters));
+        document.getElementById('popoverTitle').textContent = `🔍 ${title}`;
+        const pop = document.getElementById('drillPopover');
+        pop.style.display = 'block';
+
+        if (window.innerWidth <= 900) {
+            pop.style.left = '';
+            pop.style.top = '';
+        } else {
+            const x = Math.min(evt.clientX, window.innerWidth - 330);
+            const y = Math.min(evt.clientY + 10, window.innerHeight - 360);
+            pop.style.left = `${Math.max(10, x)}px`;
+            pop.style.top = `${Math.max(10, y)}px`;
+        }
+    }
+
+    function closeDrillPopover() {
+        document.getElementById('drillPopover').style.display = 'none';
+    }
+
+    function executePopoverDrill(targetType, targetArgs, targetTitle) {
+        closeDrillPopover();
+        if (!popoverContext) return;
+        const enc = encodeURIComponent(JSON.stringify(popoverContext));
+        drillToTarget(enc, targetType, targetArgs, targetTitle);
+    }
+
+    function executePopoverVisual(visualModule) {
+        closeDrillPopover();
+        if (!popoverContext) return;
+        pushDrillHistory();
+        popoverContext.forEach(f => addOrUpdateFilter(f.col, f.val, f.label));
+        switchModule(visualModule);
+    }
+
+    // Quick-Jumps für die KPI-Karten oben
+    function quickJumpToSheet(stype) {
+        const names = { 'journeys': 'Fahrtenliste', 'stops': 'Haltestellen', 'stats': 'Statistiken' };
+        selectSheetConfig({ sheet_name: names[stype] || stype, type: stype }, true);
+    }
+    function quickJumpToGrouped(arg1, title) {
+        selectSheetConfig({
+            sheet_name: title,
+            type: analysisMode === 'shared' ? 'shared_grouped' : 'grouped',
+            args: [arg1],
+            sort_by_distance: true
+        }, true);
+    }
+    function quickJumpToGrouped2(arg1, arg2, title) {
+        selectSheetConfig({
+            sheet_name: title,
+            type: analysisMode === 'shared' ? 'shared_grouped' : 'grouped',
+            args: [arg1, arg2],
+            sort_by_distance: true
+        }, true);
+    }
+    function quickJumpToTemporal(gType, title) {
+        analysisMode = 'user';
+        selectSheetConfig({ sheet_name: title, type: 'temporal', grouping_type: gType }, true);
+    }
+
+    // ==========================================
+    // SORTIERUNG, SUCHE & AD-HOC BUILDER
+    // ==========================================
+    function sortTableByColumn(colName) {
+        if (currentSortCol === colName) {
+            currentSortAsc = !currentSortAsc;
+        } else {
+            currentSortCol = colName;
+            currentSortAsc = false; // Zahlen standardmäßig absteigend
+        }
+        if (lastQueryResult) renderInteractiveTable(lastQueryResult);
+    }
+
+    function filterRenderedTable() {
+        if (lastQueryResult) renderInteractiveTable(lastQueryResult);
+    }
+
+    function populateAdhocDropdowns() {
+        const ids = ['adhocArg1', 'adhocArg2', 'adhocArg3', 'adhocArg4', 'manualFilterCol'];
+        const byCat = {};
+        for (const [k, info] of Object.entries(groupColumns)) {
+            if (!byCat[info.category]) byCat[info.category] = [];
+            byCat[info.category].push({ k, label: info.label });
+        }
+
+        ids.forEach((id, idx) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            let html = (idx === 0 || id === 'manualFilterCol') ? '' : '<option value="">-- Keine --</option>';
+            for (const [cat, list] of Object.entries(byCat)) {
+                html += `<optgroup label="${escapeHtml(cat)}">`;
+                list.forEach(it => {
+                    html += `<option value="${it.k}">${escapeHtml(it.label)}</option>`;
+                });
+                html += `</optgroup>`;
+            }
+            if (id === 'manualFilterCol') {
+                html += `<optgroup label="Spezial-Filter">
+                    <option value="any_stop">Haltestelle (Start oder Ziel)</option>
+                    <option value="any_stop_via">Haltestelle (Start, Ziel oder Via)</option>
+                    <option value="geo_countryName">Land (Start oder Ziel)</option>
+                    <option value="geo_city">Stadt (Start oder Ziel)</option>
+                </optgroup>`;
+            }
+            el.innerHTML = html;
+        });
+        document.getElementById('adhocArg1').value = 'operatorName';
+    }
+
+    function toggleAdhocBuilder() {
+        const box = document.getElementById('adhocBuilderBox');
+        box.style.display = box.style.display === 'none' ? 'block' : 'none';
+    }
+
+    function runAdhocQuery() {
+        const args = [
+            document.getElementById('adhocArg1').value,
+            document.getElementById('adhocArg2').value,
+            document.getElementById('adhocArg3').value,
+            document.getElementById('adhocArg4').value
+        ].filter(Boolean);
+        const uniqueArgs = [...new Set(args)];
+        const labels = uniqueArgs.map(a => (groupColumns[a] && groupColumns[a].label) || a);
+
+        selectSheetConfig({
+            sheet_name: labels.join(' & ').substring(0, 31),
+            type: analysisMode === 'shared' ? 'shared_grouped' : 'grouped',
+            args: uniqueArgs,
+            sort_by_distance: document.getElementById('adhocSort').value === 'distance',
+            exclude_empty: document.getElementById('adhocExcludeEmpty').checked,
+            min_users: 1
+        }, true);
+    }
+
+    // ==========================================
+    // INTERAKTIVES CHART.JS DIAGRAMM ZUR TABELLE
+    // ==========================================
+    function toggleInteractiveChart() {
+        const box = document.getElementById('chartBox');
+        if (box.style.display === 'none' || box.style.display === '') {
+            box.style.display = 'block';
+            if (lastQueryResult) {
+                populateChartMetrics(lastQueryResult);
+                updateInteractiveChart();
+            }
+        } else {
+            box.style.display = 'none';
+        }
+    }
+
+    function populateChartMetrics(data) {
+        const sel = document.getElementById('chartMetricSelect');
+        const cols = data.columns || [];
+        const numericCols = cols.filter(c => {
+            if ((data.group_labels || []).includes(c) || c === 'User' || c === 'Platz') return false;
+            return data.rows.some(r => typeof r[c] === 'number' || (!isNaN(parseFloat(r[c])) && String(r[c]).match(/^-?\d+(\.\d+)?$/)));
+        });
+        const prev = sel.value;
+        sel.innerHTML = numericCols.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+        if (numericCols.includes(prev)) sel.value = prev;
+        else if (numericCols.includes('Distanz (km)')) sel.value = 'Distanz (km)';
+        else if (numericCols.includes('Fahrten')) sel.value = 'Fahrten';
+    }
+
+    function updateInteractiveChart() {
+        if (!lastQueryResult || !lastQueryResult.rows || lastQueryResult.rows.length === 0) return;
+        const metric = document.getElementById('chartMetricSelect').value;
+        const chartType = document.getElementById('chartTypeSelect').value;
+        if (!metric) return;
+
+        const gLabels = lastQueryResult.group_labels && lastQueryResult.group_labels.length > 0
+            ? lastQueryResult.group_labels
+            : [lastQueryResult.columns[0]];
+
+        const maxItems = chartType === 'doughnut' ? 12 : 30;
+        const sliceRows = lastQueryResult.rows.filter(r => r[gLabels[0]] !== '').slice(0, maxItems);
+
+        const labels = sliceRows.map(r => gLabels.map(l => r[l]).filter(Boolean).join(' / '));
+        const values = sliceRows.map(r => parseFloat(r[metric]) || 0);
+
+        const ctx = document.getElementById('interactiveCanvas').getContext('2d');
+        if (chartInstance) chartInstance.destroy();
+
+        const palette = ['#004488', '#e63900', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#469990', '#f032e6', '#fabed4', '#008080', '#9A6324', '#800000'];
+
+        chartInstance = new Chart(ctx, {
+            type: chartType,
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: metric,
+                    data: values,
+                    backgroundColor: chartType === 'doughnut' ? palette : '#004488',
+                    borderColor: '#003366',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                onClick: (evt, elements) => {
+                    if (elements.length > 0 && lastQueryResult.group_args && lastQueryResult.group_args.length > 0) {
+                        const idx = elements[0].index;
+                        const clickedRow = sliceRows[idx];
+                        const rf = extractRowGroupFilters(clickedRow, lastQueryResult.group_args, lastQueryResult.group_labels);
+                        openDrillPopover(evt.native, encodeURIComponent(JSON.stringify(rf)), labels[idx]);
+                    }
+                }
+            }
+        });
+    }
+
+    // ==========================================
+    // WEITERE MODULE (KARTEN, TIMELINE, PLOTS)
+    // ==========================================
+    function switchModule(modName, autoLoad = true) {
+        activeModule = modName;
+        const mobSelect = document.getElementById('mobileModuleSelect');
+        if (mobSelect) mobSelect.value = modName;
+
+        document.querySelectorAll('.module-tab').forEach(b => b.classList.remove('active'));
+        const tabBtn = document.getElementById(`modTab-${modName}`);
+        if (tabBtn) tabBtn.classList.add('active');
+
+        document.querySelectorAll('.module-section').forEach(sec => sec.style.display = 'none');
+        const targetSec = document.getElementById(`module-${modName}`);
+        if (targetSec) targetSec.style.display = 'block';
+
+        if (autoLoad) {
+            if (modName === 'tables') executeInteractiveQuery();
+            else loadVisualModule(modName);
+        }
+    }
+
+    function reloadCurrentModule() {
+        if (activeModule === 'tables') executeInteractiveQuery();
+        else loadVisualModule(activeModule);
+    }
+
+    function loadVisualModule(modName) {
+        const users = analysisMode === 'user' ? [getPrimaryUser()] : getSelectedUsers();
+        const startDate = document.getElementById('startDate').value;
+        const endDate = document.getElementById('endDate').value;
+
+        let containerId = '';
+        let useFilters = true;
+        let liteMode = false;
+        let groupingType = 'time_of_day';
+
+        if (modName === 'polyline') {
+            containerId = 'polylineContainer';
+            useFilters = document.getElementById('polyUseFilters').checked;
+            liteMode = document.getElementById('polyLiteMode').checked;
+        } else if (modName === 'stops_map') {
+            containerId = 'stopsMapContainer';
+            useFilters = document.getElementById('stopsMapUseFilters').checked;
+            liteMode = document.getElementById('stopsMapLiteMode').checked;
+        } else if (modName === 'timeline') {
+            containerId = 'timelineContainer';
+            useFilters = document.getElementById('timelineUseFilters').checked;
+        } else if (modName === 'ganglinie') {
+            containerId = 'ganglinieContainer';
+            groupingType = document.getElementById('ganglinieTypeSelect').value;
+        } else if (modName === 'delay_plot') {
+            containerId = 'delayPlotContainer';
+        }
+
+        const container = document.getElementById(containerId);
+        container.innerHTML = `<div style="padding: 60px; text-align: center; color: #555;"><div class="spinner"></div> Generiere interaktive Ansicht (${escapeHtml(modName)})...</div>`;
+
+        fetch('/api/interactive/visual', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                visual_type: modName,
+                users: users,
+                start_date: startDate,
+                end_date: endDate,
+                filters: useFilters ? activeFilters : [],
+                lite_version: liteMode,
+                grouping_type: groupingType
+            })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.error) {
+                container.innerHTML = `<div style="padding:35px; color:var(--danger); font-weight:bold;">⚠️ ${escapeHtml(data.error)}</div>`;
+                return;
+            }
+
+            if (modName === 'polyline' || modName === 'stops_map' || modName === 'timeline') {
+                container.innerHTML = `<iframe src="${data.view_url}?t=${Date.now()}"></iframe>`;
+                const prefix = modName === 'polyline' ? 'poly' : (modName === 'stops_map' ? 'stopsMap' : 'timeline');
+                const newTab = document.getElementById(`${prefix}NewTabBtn`);
+                const dlBtn = document.getElementById(`${prefix}DownloadBtn`);
+                if (newTab) { newTab.href = data.view_url; newTab.style.display = 'inline-flex'; }
+                if (dlBtn) { dlBtn.href = data.download_url; dlBtn.style.display = 'inline-flex'; }
+            } else if (modName === 'ganglinie' || modName === 'delay_plot') {
+                const dlBtn = document.getElementById(modName === 'ganglinie' ? 'ganglinieDownloadBtn' : 'delayPlotDownloadBtn');
+                if (dlBtn && data.download_url) {
+                    dlBtn.href = data.download_url;
+                    dlBtn.style.display = 'inline-flex';
+                }
+                container.innerHTML = `
+                    <img src="${data.view_url}?t=${Date.now()}" style="max-width:100%; height:auto; border-radius:8px; box-shadow:0 4px 15px rgba(0,0,0,0.1); border:1px solid #ddd;" alt="Plot">
+                `;
+            }
+        })
+        .catch(err => {
+            container.innerHTML = `<div style="padding:35px; color:var(--danger);">Fehler beim Laden: ${escapeHtml(String(err))}</div>`;
+        });
+    }
+
+    // ==========================================
+    // FAHRT-INSPEKTOR & MANUELLE FILTER & EXPORT
+    // ==========================================
+    function openStatusInspector(statusId, bannerMessage = null, isSuccess = true) {
+        const modal = document.getElementById('statusModal');
+        const body = document.getElementById('statusModalBody');
+        document.getElementById('statusModalTitle').textContent = `🔎 Fahrt-Inspektor: Status #${statusId}`;
+        body.innerHTML = `<div style="padding:20px; text-align:center;"><div class="spinner"></div> Lade Status #${statusId}...</div>`;
+        modal.classList.add('active');
+
+        fetch(`/api/interactive/status_detail/${statusId}`)
+        .then(res => res.json())
+        .then(data => {
+            if (data.error) {
+                body.innerHTML = `<div style="color:var(--danger);">${escapeHtml(data.error)}</div>`;
+                return;
+            }
+            const j = data.journey;
+            const stopsList = data.inter_stops || [];
+            const isOwnStatus = Boolean(data.is_own_status);
+
+            let bannerHtml = '';
+            if (bannerMessage) {
+                const bannerBg = isSuccess ? '#e8f5e9' : '#ffebee';
+                const bannerBorder = isSuccess ? '#a5d6a7' : '#ef9a9a';
+                const bannerColor = isSuccess ? '#1b5e20' : '#b71c1c';
+                bannerHtml = `
+                    <div style="background:${bannerBg}; border:1px solid ${bannerBorder}; color:${bannerColor}; padding:12px 14px; border-radius:8px; margin-bottom:15px; font-size:13px; line-height:1.45; white-space:pre-line;">
+                        ${escapeHtml(bannerMessage)}
+                    </div>
+                `;
+            }
+
+            body.innerHTML = `
+                ${bannerHtml}
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; font-size:13.5px; margin-bottom:15px;">
+                    <div style="background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0;">
+                        <strong>🚆 Linie &amp; Betreiber:</strong><br>
+                        ${escapeHtml(j.lineName)} (${escapeHtml(j.category)})<br>
+                        Betreiber: <b>${escapeHtml(j.operatorName || '-')}</b><br>
+                        Fahrtnummer: ${escapeHtml(j.journeyNumber || '-')}<br>
+                        Baureihe: <b>${escapeHtml(j.locomotiveClass || '-')}</b> | Tz/Fz: <b>${escapeHtml(j.vehicleNumber || '-')}</b><br>
+                        Wagen: ${escapeHtml(j.wagon || '-')} (${escapeHtml(j.wagonClass || '-')}) | Sitz: ${escapeHtml(j.seat || '-')}
+                    </div>
+                    <div style="background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0;">
+                        <strong>🎫 Tarif &amp; Metriken:</strong><br>
+                        Distanz: <b>${(j.distance / 1000).toFixed(2)} km</b> (Luftlinie: ${(j.distanceStraightLine / 1000).toFixed(2)} km)<br>
+                        Dauer: <b>${j.durationReal} min</b> (Plan: ${j.durationPlanned} min)<br>
+                        Verspätung Ab/An: <b>${j.departureDelay} min / ${j.arrivalDelay} min</b><br>
+                        Ticket: <b>${escapeHtml(j.ticket || '-')}</b> (${escapeHtml(j.price || '-')}) | Klasse: ${escapeHtml(j.travelClass || '-')}<br>
+                        Grund: ${escapeHtml(j.business || '-')} | Client: ${escapeHtml(j.clientName || '-')}
+                    </div>
+                </div>
+                <div style="background:#eef5fa; padding:12px; border-radius:8px; margin-bottom:15px; font-size:13.5px;">
+                    <strong>🚏 Strecke:</strong> ${escapeHtml(j.originName)} ➔ ${escapeHtml(j.destName)}<br>
+                    <strong>💬 Statustext:</strong> ${escapeHtml(j.body || '(Kein Text)')}
+                </div>
+                <div style="margin-bottom:15px;">
+                    <strong style="font-size:13px;">🚉 Zwischenhalte (${stopsList.length}):</strong>
+                    <div style="max-height:150px; overflow-y:auto; background:#fafafa; border:1px solid #ddd; border-radius:6px; padding:8px; margin-top:5px; font-size:12.5px;">
+                        ${stopsList.length > 0 ? stopsList.map((s, i) => `${i+1}. ${escapeHtml(s)}`).join('<br>') : 'Keine Zwischenhalte gespeichert.'}
+                    </div>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                    <a href="https://traewelling.de/status/${statusId}" target="_blank" class="btn btn-sm btn-outline">🔗 Auf Träwelling öffnen</a>
+                    ${isOwnStatus ? `
+                        <button type="button" class="btn btn-sm btn-accent" onclick="reloadSingleStatusFromInspector(${statusId})">🔄 Status von Träwelling-API neu berechnen</button>
+                    ` : `
+                        <span style="font-size:12px; color:#777; font-style:italic;">👤 Fahrt von @${escapeHtml(j.username)} (Neu-Berechnung nur für eigene Fahrten verfügbar)</span>
+                    `}
+                </div>
+            `;
+        });
+    }
+
+    function reloadSingleStatusFromInspector(statusId) {
+        const body = document.getElementById('statusModalBody');
+        const spinnerDiv = document.createElement('div');
+        spinnerDiv.id = 'statusReloadProgress';
+        spinnerDiv.style.cssText = 'margin-top:12px; padding:10px; background:#eef5fa; border-radius:6px; color:var(--primary); font-size:13px; font-weight:bold;';
+        spinnerDiv.innerHTML = '<div class="spinner" style="display:inline-block; vertical-align:middle; margin-right:8px;"></div> Lade Status #' + statusId + ' frisch von der API und vergleiche Werte...';
+        body.appendChild(spinnerDiv);
+
+        const fd = new FormData();
+        fd.append('status_id', statusId);
+        fetch('/debug/reload_status', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            alert(d.message || (d.success ? 'Status aktualisiert.' : 'Fehler beim Neuladen.'));
+            openStatusInspector(statusId, d.message, d.success);
+            executeInteractiveQuery();
+        })
+        .catch(err => {
+            alert('Netzwerkfehler: ' + err.message);
+            openStatusInspector(statusId, 'Netzwerkfehler: ' + err.message, false);
+        });
+    }
+
+    function closeStatusModal() {
+        document.getElementById('statusModal').classList.remove('active');
+    }
+
+    function fetchManualFilterSuggestions(query, callback) {
+        const col = document.getElementById('manualFilterCol').value;
+        const users = analysisMode === 'user' ? [getPrimaryUser()] : getSelectedUsers();
+        fetch('/api/interactive/filter_values', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                col: col,
+                q: query || '',
+                users: users,
+                start_date: document.getElementById('startDate').value,
+                end_date: document.getElementById('endDate').value,
+                filters: activeFilters
+            })
+        })
+        .then(res => res.json())
+        .then(data => {
+            callback(data.values || []);
+        })
+        .catch(() => callback());
+    }
+
+    function onManualFilterColChange() {
+        if (!tomFilterValSelect) return;
+        tomFilterValSelect.clear(true);
+        tomFilterValSelect.clearOptions();
+        tomFilterValSelect.load('');
+    }
+
+    function openAddFilterModal() {
+        document.getElementById('addFilterModal').classList.add('active');
+        if (tomFilterValSelect) {
+            tomFilterValSelect.clear(true);
+            tomFilterValSelect.clearOptions();
+            tomFilterValSelect.load('');
+            setTimeout(() => tomFilterValSelect.focus(), 50);
+        }
+    }
+
+    function closeAddFilterModal() {
+        document.getElementById('addFilterModal').classList.remove('active');
+    }
+
+    function applyManualFilter() {
+        const col = document.getElementById('manualFilterCol').value;
+        const val = tomFilterValSelect ? String(tomFilterValSelect.getValue() || '').trim() : '';
+        if (!val) return;
+        const selEl = document.getElementById('manualFilterCol');
+        const colText = selEl.options[selEl.selectedIndex].text;
+        pushDrillHistory();
+        addOrUpdateFilter(col, val, `${colText}: ${val}`);
+        closeAddFilterModal();
+        reloadCurrentModule();
+    }
+
+    function exportCurrentTable(format) {
+        if (!lastQueryResult || !lastQueryResult.rows) return;
+        if (format === 'csv') {
+            const rawCols = lastQueryResult.columns || [];
+            const cols = getActiveOrderedColumns(rawCols);
+            const csvRows = [cols.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')];
+            lastQueryResult.rows.forEach(r => {
+                csvRows.push(cols.map(c => `"${String(r[c] ?? '').replace(/"/g, '""')}"`).join(';'));
+            });
+            const blob = new Blob(["\uFEFF" + csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${(currentSheetConfig.sheet_name || 'Auswertung')}.csv`;
+            a.click();
+        } else if (format === 'xlsx') {
+            const users = analysisMode === 'user' ? [getPrimaryUser()] : getSelectedUsers();
+            fetch('/api/interactive/export_table', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: analysisMode,
+                    users: users,
+                    start_date: document.getElementById('startDate').value,
+                    end_date: document.getElementById('endDate').value,
+                    sheet_config: currentSheetConfig,
+                    filters: activeFilters
+                })
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (d.download_url) window.location.href = d.download_url;
+                else alert(d.error || 'Export fehlgeschlagen');
+            });
+        }
+    }
+
+    function triggerDbSync() {
+        const btn = document.getElementById('syncBtn');
+        const bannerBtn = document.getElementById('bannerSyncBtn');
+        const logBar = document.getElementById('syncStatusBar');
+        if (btn) btn.disabled = true;
+        if (bannerBtn) {
+            bannerBtn.disabled = true;
+            bannerBtn.textContent = '⏳ Lade Daten...';
+        }
+        logBar.style.display = 'block';
+        logBar.textContent = '🚀 Starte Datenbank-Synchronisation mit Träwelling...';
+
+        const fd = new FormData();
+        getSelectedUsers().forEach(u => fd.append('users', u));
+        fd.append('update_db', 'on');
+
+        fetch('/start_generation', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.task_id) {
+                logBar.textContent = '❌ Fehler beim Starten des Syncs.';
+                if (btn) btn.disabled = false;
+                if (bannerBtn) {
+                    bannerBtn.disabled = false;
+                    bannerBtn.textContent = '🔄 Daten jetzt laden';
+                }
+                return;
+            }
+            const iv = setInterval(() => {
+                fetch('/task_status/' + d.task_id)
+                .then(r => r.json())
+                .then(st => {
+                    if (st.logs && st.logs.length > 0) {
+                        logBar.textContent = st.logs[st.logs.length - 1];
+                    }
+                    if (st.status === 'completed' || st.status === 'error' || st.status === 'stopped') {
+                        clearInterval(iv);
+                        if (btn) btn.disabled = false;
+                        if (bannerBtn) {
+                            bannerBtn.disabled = false;
+                            bannerBtn.textContent = '🔄 Daten jetzt laden';
+                        }
+                        setTimeout(() => { logBar.style.display = 'none'; }, 4000);
+                        reloadCurrentModule();
+                    }
+                });
+            }, 1000);
+        });
+    }
+
+    function escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+</script>
+</body>
+</html>

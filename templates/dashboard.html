@@ -2,20 +2,24 @@
 <html lang="de">
 <head>
     <meta charset="UTF-8">
-    <title>Dashboard - {{ username }} (v9)</title>
+    <title>Dashboard - {{ username }} (v10)</title>
     
     <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.default.min.css" rel="stylesheet">
     
     <style>
         body { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background-color: #f4f4f9; }
         .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        .btn { padding: 10px 15px; color: white; background-color: #004488; text-decoration: none; border-radius: 5px; border: none; cursor: pointer; font-size: 15px; display: inline-block; transition: background-color 0.3s ease; }
+        .btn { padding: 10px 15px; color: white; background-color: #004488; text-decoration: none; border-radius: 5px; border: none; cursor: pointer; font-size: 14px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; transition: background-color 0.3s ease; }
         .btn:hover { background-color: #003366; }
         .btn:disabled { background-color: #999; cursor: not-allowed; }
-        .btn-logout { background-color: #555; float: right; }
+        .btn-logout { background-color: #555; }
         ul { list-style: none; padding: 0; margin-bottom: 20px; }
         li { background: #eee; margin: 5px 0; padding: 10px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; transition: all 0.3s ease; }
         
+        .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; gap: 15px; flex-wrap: wrap; }
+        .header-bar h1 { margin: 0; color: #004488; font-size: 26px; }
+        .header-nav { display: flex; gap: 8px; flex-wrap: wrap; }
+
         .grid-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
         .form-group { margin-bottom: 15px; }
         .form-group label { display: block; font-weight: bold; margin-bottom: 5px; }
@@ -23,14 +27,39 @@
         
         .ts-control { border-radius: 4px; border: 1px solid #ccc; padding: 8px; }
         
+        /* Collapsible Export Cards */
+        .export-group-card { background: #fdfdfd; border: 1px solid #e0e5eb; border-radius: 6px; margin-bottom: 10px; padding: 0; overflow: hidden; }
+        .export-group-card summary { font-weight: bold; font-size: 13.5px; padding: 10px 12px; background: #f3f6f9; cursor: pointer; outline: none; user-select: none; color: #2c3e50; border-bottom: 1px solid transparent; }
+        .export-group-card[open] summary { border-bottom: 1px solid #e0e5eb; }
+        .export-group-body { padding: 12px 14px; }
+
         #terminalBox { display: none; margin-top: 20px; }
         #statusLogs { height: 260px; overflow-y: scroll; font-family: 'Courier New', monospace; font-size: 13px; background: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
         .badge-new { background-color: #28a745; color: white; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: 3px; margin-left: 8px; text-transform: uppercase; }
+
+        @media (max-width: 768px) {
+            body { padding: 12px 8px; }
+            .card { padding: 15px; }
+            .header-bar { flex-direction: column; align-items: stretch; gap: 12px; }
+            .header-nav { width: 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+            .header-nav .btn { padding: 9px 8px; font-size: 13px; width: 100%; box-sizing: border-box; }
+            .grid-layout { grid-template-columns: 1fr; gap: 12px; }
+            li { flex-direction: column; align-items: stretch; gap: 8px; }
+            li > div { display: flex; justify-content: flex-end; gap: 6px; }
+        }
     </style>
 </head>
 <body>
-    <a href="/logout" class="btn btn-logout">Logout</a>
-    <h1>Moin, {{ username }} 👋</h1>
+    <div class="header-bar">
+        <h1>Moin, {{ username }} 👋</h1>
+        <div class="header-nav">
+            <a href="/" class="btn" style="background-color: #4363d8;">🏠 Start</a>
+            <a href="/interactive" class="btn" style="background-color: #28a745;">🔍 Interaktiv</a>
+            <a href="/settings" class="btn" style="background-color: #004488;">⚙️ Baukasten</a>
+            <a href="/ai" class="btn" style="background-color: #6f42c1;">🤖 KI-Assistent</a>
+            <a href="/logout" class="btn btn-logout">Logout</a>
+        </div>
+    </div>
 
     <div class="card">
         <h2>Neue Auswertung generieren</h2>
@@ -61,46 +90,67 @@
                 </div>
 
                 <div>
-                    <div class="form-group" style="background: #f9f9f9; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
-                        <label style="font-size: 16px; margin-bottom: 10px;">Auswahl & Einstellungen</label>
+                    <div class="form-group" style="background: #f9fbfd; padding: 14px; border-radius: 6px; border: 1px solid #dce3e8;">
+                        <label style="font-size: 15px; margin-bottom: 10px; color: #004488;">Auswahl &amp; Einstellungen</label>
                         
-                        <label style="font-weight: normal; display: block; margin-bottom: 8px; color: #004488;">
-                            <input type="checkbox" name="update_db" id="update_db" checked> 
-                            <b>Aktualisiere Datenbank</b> <small style="color: #555;">(Neue Fahrten suchen)</small>
-                        </label>
+                        <div style="background: #eef5fa; border: 1px solid #b8d4ec; border-radius: 5px; padding: 10px; margin-bottom: 12px;">
+                            <label style="font-weight: bold; display: flex; align-items: center; gap: 8px; margin: 0; color: #004488; cursor: pointer;">
+                                <input type="checkbox" name="update_db" id="update_db" checked style="transform: scale(1.15);"> 
+                                <span>🔄 Datenbank aktualisieren <small style="font-weight: normal; color: #555;">(Neue Fahrten suchen)</small></span>
+                            </label>
+                        </div>
                         
-                        <hr style="border: 0; border-top: 1px solid #ccc; margin: 12px 0;">
-                        
-                        <label style="font-weight: normal; display: block; margin-bottom: 8px;">
-                            <input type="checkbox" name="gen_excel" checked> Persönliches Excel-Fahrtenbuch
-                        </label>
-                        <label style="font-weight: normal; display: block; margin-bottom: 8px;">
-                            <input type="checkbox" name="gen_shared_excel" checked> Gemeinsames Excel-Dashboard <small style="color: #666;">(bei mehreren Usern)</small>
-                        </label>
-                        <label style="font-weight: normal; display: block; margin-bottom: 8px;">
-                            <input type="checkbox" name="gen_timeline" id="gen_timeline" checked> Interaktive Timeline (Zeitachse)
-                        </label>
-                        <label style="font-weight: normal; display: block; margin-bottom: 8px;">
-                            <input type="checkbox" name="gen_time" checked> Tageszeiten (Ganglinien) <br><small style="color: #666; margin-left:22px;">(Benötigt aktiviertes persönliches Excel-Fahrtenbuch)</small>
-                        </label>
-                        
-                        <label style="font-weight: normal; display: block; margin-bottom: 4px;">
-                            <input type="checkbox" name="gen_map" id="gen_map" checked> Interaktive Streckenkarte (Polylines)
-                        </label>
-                        <label id="label_gen_map_lite" style="font-weight: normal; display: block; margin-bottom: 8px; margin-left: 25px;">
-                            <input type="checkbox" name="gen_map_lite" id="gen_map_lite"> Lite-Version <small style="color: #666;">(Mobil-optimiert: Ohne Filter & Highlighting)</small>
-                        </label>
-                        
-                        <label style="font-weight: normal; display: block; margin-bottom: 4px;">
-                            <input type="checkbox" name="gen_stop_map" id="gen_stop_map" checked> Interaktive Haltestellenkarte
-                        </label>
-                        <label id="label_gen_stop_map_lite" style="font-weight: normal; display: block; margin-bottom: 8px; margin-left: 25px;">
-                            <input type="checkbox" name="gen_stop_map_lite" id="gen_stop_map_lite"> Lite-Version <small style="color: #666;">(Mobil-optimiert: Ohne Filter, Heatmap & Hub-Werte)</small>
-                        </label>
+                        <!-- Gruppe 1: Excel -->
+                        <details class="export-group-card" open>
+                            <summary>📊 Excel-Fahrtenbücher</summary>
+                            <div class="export-group-body">
+                                <label style="font-weight: normal; display: block; margin-bottom: 8px; cursor: pointer;">
+                                    <input type="checkbox" name="gen_excel" checked> Persönliches Excel-Fahrtenbuch
+                                </label>
+                                <label style="font-weight: normal; display: block; margin-bottom: 8px; cursor: pointer;">
+                                    <input type="checkbox" name="gen_shared_excel" checked> Gemeinsames Excel-Dashboard <small style="color: #666;">(bei mehreren Usern)</small>
+                                </label>
+                                <div style="margin: 4px 0 0 22px;">
+                                    <a href="/settings" style="font-size: 12px; color: #004488; text-decoration: underline;">⚙️ Excel-Tabellenblätter &amp; Parameter anpassen</a>
+                                </div>
+                            </div>
+                        </details>
 
-                        <label style="font-weight: normal; display: block; margin-bottom: 8px;">
-                            <input type="checkbox" name="gen_delay" checked> Verspätungs-Graphen
-                        </label>
+                        <!-- Gruppe 2: Karten -->
+                        <details class="export-group-card" open>
+                            <summary>🗺️ Interaktive Karten</summary>
+                            <div class="export-group-body">
+                                <label style="font-weight: normal; display: block; margin-bottom: 4px; cursor: pointer;">
+                                    <input type="checkbox" name="gen_map" id="gen_map" checked> Streckenkarte (Polylines)
+                                </label>
+                                <label id="label_gen_map_lite" style="font-weight: normal; display: block; margin-bottom: 10px; margin-left: 24px; cursor: pointer;">
+                                    <input type="checkbox" name="gen_map_lite" id="gen_map_lite"> Lite-Version <small style="color: #666;">(Mobil-optimiert: Ohne Filter & Highlighting)</small>
+                                </label>
+                                
+                                <label style="font-weight: normal; display: block; margin-bottom: 4px; cursor: pointer;">
+                                    <input type="checkbox" name="gen_stop_map" id="gen_stop_map" checked> Haltestellenkarte
+                                </label>
+                                <label id="label_gen_stop_map_lite" style="font-weight: normal; display: block; margin-bottom: 4px; margin-left: 24px; cursor: pointer;">
+                                    <input type="checkbox" name="gen_stop_map_lite" id="gen_stop_map_lite"> Lite-Version <small style="color: #666;">(Mobil-optimiert: Ohne Filter, Heatmap & Hub-Werte)</small>
+                                </label>
+                            </div>
+                        </details>
+
+                        <!-- Gruppe 3: Timelines & Diagramme -->
+                        <details class="export-group-card" open>
+                            <summary>📈 Timelines &amp; Diagramme</summary>
+                            <div class="export-group-body">
+                                <label style="font-weight: normal; display: block; margin-bottom: 8px; cursor: pointer;">
+                                    <input type="checkbox" name="gen_timeline" id="gen_timeline" checked> Interaktive Timeline (Zeitachse)
+                                </label>
+                                <label style="font-weight: normal; display: block; margin-bottom: 8px; cursor: pointer;">
+                                    <input type="checkbox" name="gen_time" checked> Tageszeiten (Ganglinien) <br><small style="color: #666; margin-left:22px;">(Benötigt aktiviertes persönliches Excel-Fahrtenbuch)</small>
+                                </label>
+                                <label style="font-weight: normal; display: block; margin-bottom: 0; cursor: pointer;">
+                                    <input type="checkbox" name="gen_delay" checked> Verspätungs-Graphen
+                                </label>
+                            </div>
+                        </details>
                     </div>
                 </div>
             </div>

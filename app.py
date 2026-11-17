@@ -7,7 +7,7 @@ import uuid
 import threading
 import json
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, session, redirect, url_for, render_template, send_from_directory, abort, jsonify, render_template_string
 import traewelling_analysis as ta
 
@@ -24,22 +24,108 @@ if not os.path.exists(ENV_PATH):
         f.write("CLIENT_SECRET=\n")
         f.write("REDIRECT_URI=\n")
         f.write("TRAEWELLING_API_TOKEN=\n")
+        f.write("GEMINI_API_KEY=\n")
+        f.write("ADMIN_USER=tee_beutel,west_train\n")
 
-load_dotenv(ENV_PATH)
+load_dotenv(ENV_PATH, override=True)
 flask_secret = os.getenv('FLASK_SECRET_KEY')
 if not flask_secret:
     flask_secret = secrets.token_hex(32)
     set_key(ENV_PATH, 'FLASK_SECRET_KEY', flask_secret)
     os.environ['FLASK_SECRET_KEY'] = flask_secret
 
+from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.exceptions import HTTPException
+import traceback
+
 app.secret_key = flask_secret
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=12)
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(e):
+    username = session.get('username') if 'username' in session else None
+    if isinstance(e, HTTPException):
+        if e.code >= 500:
+            ta.log_error(
+                username=username,
+                error=e,
+                context=f"HTTP {e.code} ({request.method} {request.path})"
+            )
+        return e
+
+    tb_str = traceback.format_exc()
+    ta.log_error(
+        username=username,
+        error=e,
+        traceback_str=tb_str,
+        context=f"Unhandled 500 ({request.method} {request.path})"
+    )
+    if request.path.startswith('/api/') or request.is_json:
+        return jsonify({'error': 'Interner Serverfehler: ' + str(e)}), 500
+    return render_template_string(
+        "<h1>500 Interner Serverfehler</h1><p>{{ error }}</p><p><a href='/'>Zurück zur Startseite</a></p>",
+        error=str(e)
+    ), 500
+
+@app.before_request
+def make_session_permanent():
+    session.permanent = True
+    session.modified = True
+    username = session.get('username')
+
+    orig_ip = request.environ.get('orig_remote_addr') or request.environ.get('REMOTE_ADDR', '-')
+    request.environ['orig_remote_addr'] = orig_ip
+    request.environ['REMOTE_ADDR'] = f"@{username}" if username else f"Gast ({orig_ip})"
+    request.environ['REMOTE_USER'] = username or '-'
+
+    if username and not request.path.startswith('/static/'):
+        now_ts = time.time()
+        if now_ts - session.get('_last_online_sync', 0) > 60:
+            session['_last_online_sync'] = now_ts
+            try:
+                conn = ta.init_db()
+                cur = conn.cursor()
+                cur.execute("UPDATE user_login_data SET last_online = ? WHERE owner = ?", (datetime.now().isoformat(), username))
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+
+@app.after_request
+def update_log_username(response):
+    username = session.get('username')
+    orig_ip = request.environ.get('orig_remote_addr') or request.environ.get('REMOTE_ADDR', '-')
+    request.environ['REMOTE_ADDR'] = f"@{username}" if username else f"Gast ({orig_ip})"
+    request.environ['REMOTE_USER'] = username or '-'
+    return response
 
 def get_env_val(key, default=''):
+    load_dotenv(ENV_PATH, override=True)
     return os.getenv(key, default).strip()
 
 def save_env_val(key, value):
     set_key(ENV_PATH, key, value)
     os.environ[key] = value
+
+def get_admin_users():
+    raw = get_env_val('ADMIN_USER', 'tee_beutel,west_train')
+    if not raw:
+        return {'tee_beutel', 'west_train'}
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return {str(u).strip() for u in parsed if str(u).strip()}
+    except Exception:
+        pass
+    return {u.strip() for u in raw.split(',') if u.strip()}
+
+def is_admin_user(username):
+    if not username:
+        return False
+    return username in get_admin_users()
 
 def get_oauth_config():
     return (
@@ -155,6 +241,7 @@ def run_generation_task(task_id, creator, api_token, selected_users, start_date,
             conn = ta.init_db()
 
             ta.AUTH_USER = creator
+            user_excel_settings = ta.get_user_excel_settings(conn, creator)
             ta.TRUSTED_USERS = ta.fetch_paginated_users(api_token, 'https://traewelling.de/api/v1/user/self/trusted-by')
             ta.FOLLOWED_USERS = ta.fetch_paginated_users(api_token, 'https://traewelling.de/api/v1/user/self/followings')
             ta.FOLLOWERS_USERS = ta.fetch_paginated_users(api_token, 'https://traewelling.de/api/v1/user/self/followers')
@@ -185,7 +272,7 @@ def run_generation_task(task_id, creator, api_token, selected_users, start_date,
                         if options['gen_excel']:
                             check_stop()
                             log(f'Erstelle Excel-Fahrtenbuch für {user}...')
-                            excel_filename = ta.create_user_excel_file(conn, user, start_date=start_date, end_date=end_date, create_picture=options['gen_time'])
+                            excel_filename = ta.create_user_excel_file(conn, user, start_date=start_date, end_date=end_date, create_picture=options['gen_time'], custom_settings=user_excel_settings)
                             check_stop()
                             move_to_user_dir(creator, excel_filename, "user")
                             add_live_file(excel_filename, "user")
@@ -250,7 +337,7 @@ def run_generation_task(task_id, creator, api_token, selected_users, start_date,
                 if options.get('gen_shared_excel'):
                     check_stop()
                     log('Erstelle gemeinsames Excel-Dashboard...')
-                    shared_excel = ta.create_shared_excel_file(conn=conn, usernames=selected_users, start_date=start_date, end_date=end_date)
+                    shared_excel = ta.create_shared_excel_file(conn=conn, usernames=selected_users, start_date=start_date, end_date=end_date, custom_settings=user_excel_settings)
                     if shared_excel:
                         check_stop()
                         move_to_user_dir(creator, shared_excel, "shared")
@@ -294,7 +381,15 @@ def run_generation_task(task_id, creator, api_token, selected_users, start_date,
             log(f'\n{str(e)}', ignore_stop=True)
             TASKS[task_id]['status'] = 'stopped'
         except Exception as e:
-            log(f'\n❌ KRITISCHER FEHLER: {str(e)}', ignore_stop=True)
+            tb_str = traceback.format_exc()
+            print(tb_str)
+            ta.log_error(
+                username=creator,
+                error=e,
+                traceback_str=tb_str,
+                context=f"run_generation_task (task_id: {task_id}, target_users: {selected_users})"
+            )
+            log(f'\n❌ KRITISCHER FEHLER: {str(e)}\n{tb_str.splitlines()[-3] if len(tb_str.splitlines()) >= 3 else ""}', ignore_stop=True)
             TASKS[task_id]['status'] = 'error'
         finally:
             with queue_lock:
@@ -379,6 +474,11 @@ def run_debug_task(task_id, username, fix_type):
             TASKS[task_id]['status'] = 'completed'
 
     except Exception as e:
+        ta.log_error(
+            username=username,
+            error=e,
+            context=f"run_debug_task (fix_type: {fix_type}, task_id: {task_id})"
+        )
         log(f"❌ Fehler bei der Reparatur: {str(e)}")
         if task_id in TASKS:
             TASKS[task_id]['status'] = 'error'
@@ -395,7 +495,10 @@ def run_debug_task(task_id, username, fix_type):
 # ==========================================
 @app.route('/')
 def index():
-    if 'username' in session: return redirect(url_for('dashboard'))
+    username = session.get('username')
+    if username:
+        return render_template('index.html', logged_in=True, username=username)
+
     cid, csecret, red_uri = get_oauth_config()
     has_oauth = bool(cid and csecret and red_uri)
     stored_token = get_env_val('TRAEWELLING_API_TOKEN')
@@ -405,6 +508,7 @@ def index():
         token_preview = stored_token[:12] + "..." + stored_token[-8:] if len(stored_token) > 24 else "***"
 
     return render_template('index.html',
+                           logged_in=False,
                            has_oauth=has_oauth,
                            has_token=has_token,
                            client_id=cid,
@@ -422,6 +526,10 @@ def login():
 
 @app.route('/setup_oauth', methods=['POST'])
 def setup_oauth():
+    cid, csecret, red_uri = get_oauth_config()
+    if cid and csecret and red_uri:
+        return redirect(url_for('index', error="OAuth-Zugangsdaten sind bereits in der .env hinterlegt."))
+
     cid = request.form.get('client_id', '').strip()
     csecret = request.form.get('client_secret', '').strip()
     red_uri = request.form.get('redirect_uri', '').strip()
@@ -436,7 +544,10 @@ def setup_oauth():
 @app.route('/login_token', methods=['POST'])
 def login_token():
     token = request.form.get('api_token', '').strip()
-    if not token:
+    cid, csecret, red_uri = get_oauth_config()
+    has_oauth = bool(cid and csecret and red_uri)
+
+    if not token and not has_oauth:
         token = get_env_val('TRAEWELLING_API_TOKEN')
 
     if not token:
@@ -447,7 +558,7 @@ def login_token():
             'https://traewelling.de/api/v1/auth/user',
             headers={
                 'Authorization': f'Bearer {token}',
-                'User-Agent': 'TraewellingAnalysis_WebApp v9',
+                'User-Agent': 'TraewellingAnalysis_WebApp v10',
                 'Accept': 'application/json'
             },
             timeout=15
@@ -462,37 +573,44 @@ def login_token():
     if not username:
         return redirect(url_for('index', error="Benutzername konnte nicht ermittelt werden."))
 
-    # In .env speichern
-    save_env_val('TRAEWELLING_API_TOKEN', token)
+    # Nur in .env speichern, wenn KEIN OAuth hinterlegt ist
+    if not has_oauth:
+        save_env_val('TRAEWELLING_API_TOKEN', token)
+        session['session_only'] = False
+    else:
+        session['session_only'] = True
 
     trusted = ta.fetch_paginated_users(token, 'https://traewelling.de/api/v1/user/self/trusted-by')
     followed = ta.fetch_paginated_users(token, 'https://traewelling.de/api/v1/user/self/followings')
     followers = ta.fetch_paginated_users(token, 'https://traewelling.de/api/v1/user/self/followers')
 
+    now_iso = datetime.now().isoformat()
     conn = ta.init_db()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO user_login_data (owner, access_token, followed_users, trusted_users, followers, last_updated) 
-        VALUES (?, ?, ?, ?, ?, ?) 
+        INSERT INTO user_login_data (owner, access_token, followed_users, trusted_users, followers, last_updated, last_online) 
+        VALUES (?, ?, ?, ?, ?, ?, ?) 
         ON CONFLICT(owner) DO UPDATE SET 
             access_token = excluded.access_token,
             followed_users = excluded.followed_users,
             trusted_users = excluded.trusted_users,
             followers = excluded.followers,
-            last_updated = excluded.last_updated
+            last_updated = excluded.last_updated,
+            last_online = excluded.last_online
     """, (
         username, 
         token, 
         json.dumps(list(followed)), 
         json.dumps(list(trusted)), 
         json.dumps(list(followers)),
-        datetime.now().isoformat()
+        now_iso,
+        now_iso
     ))
     conn.commit()
     conn.close()
 
     session['username'] = username
-    return redirect(url_for('dashboard'))
+    return redirect(url_for('index'))
 
 @app.route('/callback')
 def callback():
@@ -502,7 +620,7 @@ def callback():
     cid, csecret, red_uri = get_oauth_config()
     token_data = {'grant_type': 'authorization_code', 'client_id': cid, 'client_secret': csecret, 'redirect_uri': red_uri, 'code': code}
     
-    resp = requests.post(TOKEN_URL, data=token_data, headers={'User-Agent': 'TraewellingAnalysis_WebApp v9'})
+    resp = requests.post(TOKEN_URL, data=token_data, headers={'User-Agent': 'TraewellingAnalysis_WebApp v10'})
     if resp.status_code != 200: return f"Token-Fehler: {resp.text}", 400
 
     token_json = resp.json()
@@ -512,7 +630,7 @@ def callback():
         'https://traewelling.de/api/v1/auth/user', 
         headers={
             'Authorization': f'Bearer {access_token}',
-            'User-Agent': 'TraewellingAnalysis_WebApp v9',
+            'User-Agent': 'TraewellingAnalysis_WebApp v10',
             'Accept': 'application/json'
         }
     )
@@ -522,9 +640,6 @@ def callback():
 
     username = user_resp.json().get('data', {}).get('username')
 
-    # In .env speichern
-    save_env_val('TRAEWELLING_API_TOKEN', access_token)
-
     trusted = ta.fetch_paginated_users(access_token, 'https://traewelling.de/api/v1/user/self/trusted-by')
     followed = ta.fetch_paginated_users(access_token, 'https://traewelling.de/api/v1/user/self/followings')
     followers = ta.fetch_paginated_users(access_token, 'https://traewelling.de/api/v1/user/self/followers')
@@ -532,32 +647,46 @@ def callback():
     conn = ta.init_db()
     cursor = conn.cursor()
     
+    now_iso = datetime.now().isoformat()
     cursor.execute("""
-        INSERT INTO user_login_data (owner, access_token, followed_users, trusted_users, followers, last_updated) 
-        VALUES (?, ?, ?, ?, ?, ?) 
+        INSERT INTO user_login_data (owner, access_token, followed_users, trusted_users, followers, last_updated, last_online) 
+        VALUES (?, ?, ?, ?, ?, ?, ?) 
         ON CONFLICT(owner) DO UPDATE SET 
             access_token = excluded.access_token,
             followed_users = excluded.followed_users,
             trusted_users = excluded.trusted_users,
             followers = excluded.followers,
-            last_updated = excluded.last_updated
+            last_updated = excluded.last_updated,
+            last_online = excluded.last_online
     """, (
         username, 
         access_token, 
         json.dumps(list(followed)), 
         json.dumps(list(trusted)), 
         json.dumps(list(followers)),
-        datetime.now().isoformat()
+        now_iso,
+        now_iso
     ))
     conn.commit()
     conn.close()
 
     session['username'] = username
-    return redirect(url_for('dashboard'))
+    session['session_only'] = False
+    return redirect(url_for('index'))
 
 @app.route('/logout')
 def logout():
-    session.pop('username', None)
+    username = session.pop('username', None)
+    is_session_only = session.pop('session_only', False)
+    if is_session_only and username:
+        try:
+            conn = ta.init_db()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE user_login_data SET access_token = '' WHERE owner = ?", (username,))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
     return redirect(url_for('index'))
 
 @app.route('/dashboard')
@@ -765,9 +894,79 @@ def handle_file(action, folder, filename):
 
 
 
+# ==========================================
+# EXCEL-SETTINGS ROUTEN (user_login_data)
+# ==========================================
+@app.route('/settings')
+def settings_page():
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    username = session['username']
+
+    conn = ta.init_db()
+    current_settings = ta.get_user_excel_settings(conn, username)
+    default_settings = ta.get_default_excel_settings()
+    conn.close()
+
+    return render_template(
+        'settings.html',
+        username=username,
+        current_settings=current_settings,
+        default_settings=default_settings,
+        available_group_cols=ta.AVAILABLE_GROUP_COLUMNS,
+        available_temporal=ta.AVAILABLE_TEMPORAL_TYPES,
+        available_geo=ta.AVAILABLE_GEO_COLUMNS,
+        sheet_metrics_schema=ta.SHEET_METRICS_SCHEMA
+    )
+
+
+@app.route('/api/settings/save', methods=['POST'])
+def api_save_settings():
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    username = session['username']
+
+    data = request.get_json(silent=True)
+    if not data or not isinstance(data, dict):
+        return jsonify({'error': 'Ungültige JSON-Daten'}), 400
+
+    if not isinstance(data.get('user_sheets'), list) or not isinstance(data.get('shared_sheets'), list):
+        return jsonify({'error': 'JSON muss user_sheets und shared_sheets als Listen enthalten.'}), 400
+
+    conn = ta.init_db()
+    try:
+        ta.save_user_excel_settings(conn, username, data)
+        return jsonify({'success': True})
+    except Exception as e:
+        ta.log_error(username=username, error=e, context="api_save_settings")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/settings/reset', methods=['POST'])
+def api_reset_settings():
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    username = session['username']
+
+    conn = ta.init_db()
+    try:
+        defaults = ta.get_default_excel_settings()
+        ta.save_user_excel_settings(conn, username, defaults)
+        return jsonify({'success': True, 'settings': defaults})
+    except Exception as e:
+        ta.log_error(username=username, error=e, context="api_reset_settings")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
 @app.route('/debug')
 def debug_page():
     if 'username' not in session: return redirect(url_for('login'))
+    if not is_admin_user(session['username']):
+        abort(403)
 
     conn = ta.init_db()
     conn.row_factory = sqlite3.Row
@@ -850,8 +1049,11 @@ def debug_page():
     cursor.execute("SELECT statusId FROM polylines WHERE statusId NOT IN (SELECT statusId FROM journeys)")
     check9_orphaned = [dict(row) for row in cursor.fetchall()]
 
+    # 10. Fehlerprotokoll (Error Log)
+    check10_errors = ta.get_error_logs(limit=100)
+
     # Sammle alle eindeutigen betroffenen User über alle Checks hinweg für den Filter
-    all_items = check1 + check2 + check3 + check4 + check5 + check6 + check7 + check8
+    all_items = check1 + check2 + check3 + check4 + check5 + check6 + check7 + check8 + check10_errors
     unique_users = sorted(list(set([r.get('username') for r in all_items if r.get('username')])))
 
     return render_template('debug.html',
@@ -859,13 +1061,26 @@ def debug_page():
                            check4=check4, check5=check5, check6=check6,
                            check7=check7, check8=check8,
                            check9_empty=check9_empty, check9_orphaned=check9_orphaned,
+                           check10_errors=check10_errors,
                            unique_users=unique_users)
+
+
+@app.route('/debug/clear_errors', methods=['POST'])
+def debug_clear_errors():
+    if 'username' not in session: return jsonify({'error': 'Nicht eingeloggt'}), 401
+    if not is_admin_user(session['username']):
+        return jsonify({'error': 'Nicht autorisiert'}), 403
+
+    deleted_count = ta.clear_error_logs()
+    return jsonify({'success': True, 'message': f'{deleted_count} Fehlereinträge wurden gelöscht.'})
 
 
 @app.route('/debug/queue')
 def debug_queue():
     if 'username' not in session:
         return jsonify({'error': 'Nicht eingeloggt'}), 401
+    if not is_admin_user(session['username']):
+        return jsonify({'error': 'Nicht autorisiert'}), 403
 
     with queue_lock:
         current_queue = list(WAITING_QUEUE)
@@ -897,6 +1112,8 @@ def debug_queue():
 @app.route('/debug/run_fix', methods=['POST'])
 def debug_run_fix():
     if 'username' not in session: return jsonify({'error': 'Nicht eingeloggt'}), 401
+    if not is_admin_user(session['username']):
+        return jsonify({'error': 'Nicht autorisiert'}), 403
     username = session['username']
     fix_type = request.form.get('fix_type')
 
@@ -922,6 +1139,8 @@ def debug_run_fix():
 @app.route('/debug/api_check/<check_type>/<item_id>', methods=['POST'])
 def debug_api_check(check_type, item_id):
     if 'username' not in session: return jsonify({'error': 'Nicht eingeloggt'}), 401
+    if not is_admin_user(session['username']):
+        return jsonify({'error': 'Nicht autorisiert'}), 403
     username = session['username']
 
     conn = ta.init_db()
@@ -951,7 +1170,7 @@ def debug_api_check(check_type, item_id):
             resp = requests.get(f'https://traewelling.de/api/v1/status/{item_id}', headers={
                 'accept': 'application/json',
                 'Authorization': f'Bearer {api_token}',
-                'User-Agent': 'TraewellingAnalysis_WebApp v9'
+                'User-Agent': 'TraewellingAnalysis_WebApp v10'
             })
 
             if resp.status_code == 404:
@@ -1002,7 +1221,7 @@ def debug_api_check(check_type, item_id):
             resp = requests.get(f'https://traewelling.de/api/v1/stations/{item_id}', headers={
                 'accept': 'application/json',
                 'Authorization': f'Bearer {api_token}',
-                'User-Agent': 'TraewellingAnalysis_WebApp v9'
+                'User-Agent': 'TraewellingAnalysis_WebApp v10'
             })
             if resp.status_code == 404:
                 return jsonify({'success': True, 'api_data': None, 'differs': True, 'diff_reasons': [
@@ -1033,12 +1252,15 @@ def debug_api_check(check_type, item_id):
 
         return jsonify({'success': False, 'message': 'Unbekannter Check-Typ'})
     except Exception as e:
+        ta.log_error(username=username, error=e, context=f"debug_api_check ({check_type}/{item_id})")
         return jsonify({'success': False, 'message': str(e)})
 
 
 @app.route('/debug/fix_item/<check_type>/<item_id>', methods=['POST'])
 def debug_fix_item(check_type, item_id):
     if 'username' not in session: return jsonify({'error': 'Nicht eingeloggt'}), 401
+    if not is_admin_user(session['username']):
+        return jsonify({'error': 'Nicht autorisiert'}), 403
 
     conn = ta.init_db()
     cursor = conn.cursor()
@@ -1059,6 +1281,7 @@ def debug_fix_item(check_type, item_id):
         conn.commit()
         return jsonify({'success': True, 'message': msg})
     except Exception as e:
+        ta.log_error(username=username, error=e, context=f"debug_fix_item ({check_type}/{item_id})")
         return jsonify({'success': False, 'message': f'Fehler: {str(e)}'})
 
 
@@ -1079,23 +1302,990 @@ def debug_reload_status():
     conn = ta.init_db()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
+
+    # Berechtigungsprüfung: Gehört der Status zum eingeloggten User (oder ist User Admin)?
+    cursor.execute("SELECT username FROM journeys WHERE statusId = ?", (status_id,))
+    j_row = cursor.fetchone()
+    if j_row and j_row['username'] != username and not is_admin_user(username):
+        conn.close()
+        return jsonify({
+            'success': False,
+            'message': f'Berechtigung verweigert: Fahrt #{status_id} gehört @{j_row["username"]}. Du kannst nur deine eigenen Fahrten neu berechnen.'
+        }), 403
+
     cursor.execute("SELECT access_token FROM user_login_data WHERE owner=?", (username,))
     row = cursor.fetchone()
     if not row or not row['access_token']:
-        return jsonify({'error': 'Kein Token'}), 401
+        conn.close()
+        return jsonify({'error': 'Kein Träwelling-Token für deinen Account vorhanden.'}), 401
     api_token = row['access_token']
 
     success, diffs = ta.reload_single_status(conn, api_token, status_id)
+    conn.close()
+
+    col_labels = {
+        'distance': 'Distanz (m)',
+        'distanceStraightLine': 'Luftlinie (m)',
+        'distanceToPrevJourney': 'Distanz zur Vorfahrt (m)',
+        'durationReal': 'Reale Fahrzeit (min)',
+        'durationPlanned': 'Geplante Fahrzeit (min)',
+        'departureDelay': 'Abfahrtsverspätung (min)',
+        'arrivalDelay': 'Ankunftsverspätung (min)',
+        'departureFinal': 'Abfahrt (real/final)',
+        'arrivalFinal': 'Ankunft (real/final)',
+        'departurePlanned': 'Abfahrt (Plan)',
+        'arrivalPlanned': 'Ankunft (Plan)',
+        'departureFromRealtime': 'Abfahrt (Echtzeit)',
+        'arrivalFromRealtime': 'Ankunft (Echtzeit)',
+        'realtimeAvailability': 'Echtzeit-Verfügbarkeit',
+        'realtimeFromDataprovider': 'Echtzeit von Datenprovider',
+        'interStops': 'Zwischenhalte',
+        'interStopsNumber': 'Anzahl Zwischenhalte',
+        'locomotiveClass': 'Baureihe',
+        'vehicleNumber': 'Fahrzeug-/Triebzugnummer',
+        'wagonClass': 'Wagenklasse',
+        'travelClass': 'Klasse',
+        'wagon': 'Wagennummer',
+        'seat': 'Sitzplatz',
+        'lineName': 'Linienname',
+        'operatorName': 'Betreiber',
+        'category': 'Kategorie',
+        'body': 'Statustext',
+        'ticket': 'Ticket',
+        'price': 'Preis',
+        'points': 'Punkte'
+    }
+
     if success:
+        if not diffs:
+            message = f"Status #{status_id} neu berechnet: Es gab keine Änderungen (alle Daten waren bereits aktuell). Polyline wurde zurückgesetzt."
+        else:
+            diff_lines = []
+            for col, vals in diffs.items():
+                label = col_labels.get(col, col)
+                old_val = '(leer)' if vals['old'] is None or vals['old'] == '' else str(vals['old'])
+                new_val = '(leer)' if vals['new'] is None or vals['new'] == '' else str(vals['new'])
+                if len(old_val) > 40: old_val = old_val[:37] + '...'
+                if len(new_val) > 40: new_val = new_val[:37] + '...'
+                diff_lines.append(f"• {label}: {old_val} ➔ {new_val}")
+
+            message = f"Status #{status_id} erfolgreich neu berechnet!\n\nGeänderte Werte ({len(diffs)}):\n" + "\n".join(diff_lines)
+
         return jsonify({
             'success': True,
-            'message': f'Status {status_id} erfolgreich korrigiert und neu berechnet (Polyline gelöscht).',
-            'differences': diffs
+            'message': message,
+            'differences': diffs,
+            'has_changes': bool(diffs)
         })
     else:
         return jsonify({'success': False, 'message': f'Fehler beim Neuladen des Status {status_id}.'})
 
 
+# ==========================================
+# INTERAKTIVE AUSWERTUNG / DRILL-DOWN API
+# ==========================================
+
+@app.route('/interactive')
+@app.route('/interactiv')
+def interactive_page():
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    username = session['username']
+
+    conn = ta.init_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT followed_users, trusted_users, followers FROM user_login_data WHERE owner = ?", (username,))
+    row = cursor.fetchone()
+
+    available_users = set()
+    if row:
+        for item in row:
+            if item:
+                try:
+                    parsed = json.loads(item)
+                    if isinstance(parsed, list):
+                        available_users.update(parsed)
+                except Exception:
+                    pass
+    cursor.execute("SELECT username FROM users WHERE username IS NOT NULL")
+    for r in cursor.fetchall():
+        if r[0]:
+            available_users.add(r[0])
+
+    current_settings = ta.get_user_excel_settings(conn, username)
+    conn.close()
+
+    return render_template(
+        'interactive.html',
+        username=username,
+        available_users=sorted(list(available_users)),
+        current_settings=current_settings,
+        available_group_cols=ta.AVAILABLE_GROUP_COLUMNS,
+        available_temporal=ta.AVAILABLE_TEMPORAL_TYPES,
+        available_geo=ta.AVAILABLE_GEO_COLUMNS,
+        sheet_metrics_schema=ta.SHEET_METRICS_SCHEMA
+    )
+
+
+def _df_to_clean_records(df, use_index=False):
+    if df is None or df.empty:
+        return [], []
+    df_out = df.copy()
+    if use_index and df_out.index.name is not None:
+        df_out = df_out.reset_index()
+    df_out = df_out.loc[:, ~df_out.columns.duplicated()]
+
+    for col in df_out.columns:
+        if ta.pd.api.types.is_datetime64_any_dtype(df_out[col]):
+            df_out[col] = df_out[col].dt.strftime('%d.%m.%Y %H:%M').fillna('')
+
+    df_out = df_out.replace({ta.np.nan: None, ta.np.inf: '∞', -ta.np.inf: '-∞'})
+    cols = [str(c) for c in df_out.columns]
+    records = []
+    for row in df_out.to_dict(orient='records'):
+        clean_row = {}
+        for k, v in row.items():
+            if isinstance(v, (ta.datetime, ta.pd.Timestamp)):
+                clean_row[str(k)] = v.strftime('%d.%m.%Y %H:%M')
+            elif isinstance(v, float) and (ta.math.isnan(v) or ta.math.isinf(v)):
+                clean_row[str(k)] = None
+            else:
+                clean_row[str(k)] = v
+        records.append(clean_row)
+    return cols, records
+
+
+def _compute_filtered_summary(conn, usernames, start_date, end_date):
+    if isinstance(usernames, str):
+        usernames = [usernames]
+    placeholders = ','.join(['?'] * len(usernames))
+    params = list(usernames)
+    d_sql = ""
+    if start_date:
+        d_sql += " AND arrivalFinal > ?"
+        params.append(start_date)
+    if end_date:
+        e_str = end_date + 'T23:59:59' if len(end_date) == 10 else end_date
+        d_sql += " AND departureFinal < ?"
+        params.append(e_str)
+
+    vis_sql = ta.get_shared_visibility_query()
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT
+            COUNT(statusId),
+            COALESCE(SUM(distance), 0),
+            COALESCE(SUM(durationReal), 0),
+            ROUND(AVG(arrivalDelay), 2),
+            COUNT(DISTINCT operatorName),
+            COUNT(DISTINCT operatorName || lineName),
+            (COUNT(DISTINCT originId) + COUNT(DISTINCT CASE WHEN destinationId != originId THEN destinationId END))
+        FROM journeys
+        WHERE username IN ({placeholders}) {d_sql} {vis_sql}
+    """, params)
+    r = cur.fetchone() or (0, 0, 0, 0, 0, 0, 0)
+    t_trips = r[0] or 0
+    t_dist_km = round((r[1] or 0) / 1000.0, 2)
+    t_dur = int(r[2] or 0)
+    avg_speed = round(t_dist_km / (t_dur / 60.0), 2) if t_dur > 0 else 0.0
+    return {
+        'total_journeys': t_trips,
+        'total_distance_km': t_dist_km,
+        'total_duration_hhmm': f"{t_dur // 60:02d}:{t_dur % 60:02d}",
+        'avg_speed_kmh': avg_speed,
+        'avg_arr_delay': r[3] or 0.0,
+        'unique_operators': r[4] or 0,
+        'unique_lines': r[5] or 0,
+        'unique_stops': r[6] or 0
+    }
+
+
+@app.route('/api/interactive/query', methods=['POST'])
+def api_interactive_query():
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    creator = session['username']
+    payload = request.get_json(silent=True) or {}
+
+    mode = payload.get('mode', 'user')
+    users = payload.get('users') or [creator]
+    start_date = (payload.get('start_date') or '').strip()
+    end_date = (payload.get('end_date') or '').strip()
+    sheet_cfg = payload.get('sheet_config') or {'type': 'grouped', 'args': ['category'], 'sheet_name': 'Kategorie'}
+    filters = payload.get('filters') or []
+
+    conn = ta.init_db()
+    try:
+        ta.AUTH_USER = creator
+        cur = conn.cursor()
+        cur.execute("SELECT followed_users, trusted_users, followers FROM user_login_data WHERE owner = ?", (creator,))
+        r_priv = cur.fetchone()
+        if r_priv:
+            ta.FOLLOWED_USERS = set(json.loads(r_priv[0])) if r_priv[0] else set()
+            ta.TRUSTED_USERS = set(json.loads(r_priv[1])) if r_priv[1] else set()
+            ta.FOLLOWERS_USERS = set(json.loads(r_priv[2])) if r_priv[2] else set()
+
+        stype = sheet_cfg.get('type', 'grouped')
+        use_index = bool(sheet_cfg.get('index', stype in ('stops', 'stops_via', 'geo')))
+        target_user = users[0] if users else creator
+        kwargs = dict(conn=conn, username=target_user, start_date=start_date, end_date=end_date)
+
+        group_args = []
+        group_labels = []
+
+        with ta.interactive_filter_context(conn, users if mode == 'shared' else [target_user], start_date, end_date, filters):
+            summary = _compute_filtered_summary(conn, users if mode == 'shared' else [target_user], start_date, end_date)
+            df = None
+
+            if stype == 'meta':
+                df = ta.create_user_meta_dataframe(conn, target_user)
+            elif stype == 'journeys':
+                df = ta.create_journeys_dataframe(**kwargs)
+            elif stype == 'stats':
+                df = ta.create_user_stats_dataframe(**kwargs)
+            elif stype == 'stops':
+                df = ta.create_user_stops_dataframe(**kwargs)
+            elif stype == 'stops_via':
+                df = ta.create_user_stops_dataframe_with_inter(**kwargs)
+            elif stype == 'extended_stats':
+                df = ta.create_user_extended_stats(**kwargs)
+            elif stype == 'grouped':
+                args = [a for a in sheet_cfg.get('args', ['category']) if a] or ['category']
+                group_args = list(dict.fromkeys(args))
+                group_labels = [ta.AVAILABLE_GROUP_COLUMNS.get(a, {}).get('label', a) for a in group_args]
+                df = ta.create_user_grouped_frame(
+                    **kwargs,
+                    first_argument=group_args[0],
+                    second_argument=group_args[1] if len(group_args) > 1 else "",
+                    third_argument=group_args[2] if len(group_args) > 2 else "",
+                    fourth_argument=group_args[3] if len(group_args) > 3 else "",
+                    sort_by_distance=sheet_cfg.get('sort_by_distance', True),
+                    exclude_empty=sheet_cfg.get('exclude_empty', False)
+                )
+            elif stype == 'temporal':
+                g_type = sheet_cfg.get('grouping_type', 'time_of_day')
+                t_base = ta.get_temporal_base_dataframe(**kwargs, create_picture=False)
+                df = ta.create_temporal_stats_dataframe(t_base, grouping_type=g_type, username=target_user)
+            elif stype == 'geo':
+                g_col = sheet_cfg.get('geo_column', 'countryName')
+                df = ta.create_geo_dataframe(conn, target_user, g_col, start_date, end_date)
+            elif stype == 'shared_meta':
+                df = ta.create_shared_meta_dataframe(conn, users, start_date, end_date)
+            elif stype == 'shared_stats':
+                df = ta.create_shared_stats_dataframe(conn, users, start_date, end_date)
+            elif stype in ('shared_stops', 'shared_stops_filterable'):
+                df_reg, df_flt = ta.create_shared_stops_dataframes(conn, users, start_date, end_date)
+                df = df_reg if stype == 'shared_stops' else df_flt
+            elif stype == 'shared_journeys':
+                df = ta.create_shared_journeys_dataframe(conn, users, start_date, end_date)
+            elif stype == 'shared_grouped':
+                args = [a for a in sheet_cfg.get('args', ['category']) if a] or ['category']
+                group_args = list(dict.fromkeys(args))
+                group_labels = [ta.AVAILABLE_GROUP_COLUMNS.get(a, {}).get('label', a) for a in group_args]
+                df, _ = ta.create_shared_grouped_dataframe(
+                    conn, users, group_args, start_date=start_date, end_date=end_date,
+                    min_users=int(sheet_cfg.get('min_users', 1) or 1),
+                    sort_by_distance=sheet_cfg.get('sort_by_distance', True),
+                    exclude_empty=sheet_cfg.get('exclude_empty', False)
+                )
+
+            if df is not None and not df.empty:
+                df = ta.apply_sheet_metrics(df, stype, sheet_cfg.get('metrics'), num_group_args=max(1, len(group_args)))
+
+        cols, rows = _df_to_clean_records(df, use_index=use_index)
+        return jsonify({
+            'columns': cols,
+            'rows': rows,
+            'sheet_type': stype,
+            'group_args': group_args,
+            'group_labels': group_labels,
+            'summary': summary
+        })
+    except Exception as e:
+        tb_str = traceback.format_exc()
+        print(tb_str)
+        ta.log_error(username=creator, error=e, traceback_str=tb_str, context=f"api_interactive_query (sheet_type: {stype})")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/interactive/filter_values', methods=['POST'])
+def api_interactive_filter_values():
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    creator = session['username']
+    payload = request.get_json(silent=True) or {}
+
+    col = (payload.get('col') or '').strip()
+    search_q = (payload.get('q') or '').strip()
+    users = payload.get('users') or [creator]
+    start_date = (payload.get('start_date') or '').strip()
+    end_date = (payload.get('end_date') or '').strip()
+    active_filters = payload.get('filters') or []
+
+    if not col:
+        return jsonify({'values': []})
+
+    conn = ta.init_db()
+    try:
+        ta.AUTH_USER = creator
+        cur = conn.cursor()
+        cur.execute("SELECT followed_users, trusted_users, followers FROM user_login_data WHERE owner = ?", (creator,))
+        r_priv = cur.fetchone()
+        if r_priv:
+            ta.FOLLOWED_USERS = set(json.loads(r_priv[0])) if r_priv[0] else set()
+            ta.TRUSTED_USERS = set(json.loads(r_priv[1])) if r_priv[1] else set()
+            ta.FOLLOWERS_USERS = set(json.loads(r_priv[2])) if r_priv[2] else set()
+
+        placeholders = ','.join(['?'] * len(users))
+        base_params = list(users)
+        date_sql = ""
+        if start_date:
+            date_sql += " AND COALESCE(j.arrivalFinal, j.arrivalPlanned) > ?"
+            base_params.append(start_date)
+        if end_date:
+            e_val = end_date + 'T23:59:59' if len(end_date) == 10 else end_date
+            date_sql += " AND COALESCE(j.departureFinal, j.departurePlanned) < ?"
+            base_params.append(e_val)
+
+        results = []
+
+        with ta.interactive_filter_context(conn, users, start_date, end_date, active_filters):
+            vis_sql = ta.get_shared_visibility_query('j')
+
+            if col in ta.AVAILABLE_GROUP_COLUMNS:
+                sql_expr = ta.AVAILABLE_GROUP_COLUMNS[col]['sql']
+                like_sql = ""
+                q_params = list(base_params)
+                if search_q:
+                    like_sql = f" AND CAST({sql_expr} AS TEXT) LIKE ?"
+                    q_params.append(f"%{search_q}%")
+
+                cur.execute(f"""
+                    SELECT CAST({sql_expr} AS TEXT) AS val, COUNT(*) AS cnt
+                    FROM journeys j
+                    LEFT JOIN stops origin ON j.originId = origin.id
+                    LEFT JOIN stops destination ON j.destinationId = destination.id
+                    WHERE j.username IN ({placeholders}) {date_sql} {vis_sql}
+                      AND {sql_expr} IS NOT NULL AND CAST({sql_expr} AS TEXT) != '' AND CAST({sql_expr} AS TEXT) != 'N/A'
+                      {like_sql}
+                    GROUP BY val
+                    ORDER BY cnt DESC, val ASC
+                    LIMIT 60
+                """, q_params)
+                results = [{'value': r[0], 'count': r[1]} for r in cur.fetchall() if r[0]]
+
+            elif col == 'any_stop':
+                like_sql = ""
+                q_params = list(base_params) + list(base_params)
+                if search_q:
+                    like_sql = " WHERE val LIKE ?"
+                    q_params.append(f"%{search_q}%")
+
+                cur.execute(f"""
+                    SELECT val, COUNT(*) AS cnt FROM (
+                        SELECT origin.stopName AS val
+                        FROM journeys j
+                        JOIN stops origin ON j.originId = origin.id
+                        WHERE j.username IN ({placeholders}) {date_sql} {vis_sql} AND origin.stopName IS NOT NULL
+                        UNION ALL
+                        SELECT destination.stopName AS val
+                        FROM journeys j
+                        JOIN stops destination ON j.destinationId = destination.id
+                        WHERE j.username IN ({placeholders}) {date_sql} {vis_sql} AND destination.stopName IS NOT NULL
+                    )
+                    {like_sql}
+                    GROUP BY val
+                    ORDER BY cnt DESC, val ASC
+                    LIMIT 60
+                """, q_params)
+                results = [{'value': r[0], 'count': r[1]} for r in cur.fetchall() if r[0]]
+
+            elif col == 'any_stop_via':
+                from collections import Counter
+                stop_counter = Counter()
+                cur.execute(f"""
+                    SELECT origin.stopName, destination.stopName, j.interStops
+                    FROM journeys j
+                    LEFT JOIN stops origin ON j.originId = origin.id
+                    LEFT JOIN stops destination ON j.destinationId = destination.id
+                    WHERE j.username IN ({placeholders}) {date_sql} {vis_sql}
+                """, base_params)
+                q_low = search_q.lower()
+                for o_name, d_name, inter_json in cur.fetchall():
+                    for s in (o_name, d_name):
+                        if s and (not q_low or q_low in s.lower()):
+                            stop_counter[s] += 1
+                    if inter_json:
+                        try:
+                            for s in json.loads(inter_json):
+                                if s and (not q_low or q_low in s.lower()):
+                                    stop_counter[s] += 1
+                        except Exception:
+                            pass
+                results = [{'value': val, 'count': cnt} for val, cnt in stop_counter.most_common(60)]
+
+            elif col.startswith('geo_'):
+                g_col = col.replace('geo_', '')
+                if g_col in ta.AVAILABLE_GEO_COLUMNS:
+                    like_sql = ""
+                    q_params = list(base_params) + list(base_params)
+                    if search_q:
+                        like_sql = " WHERE val LIKE ?"
+                        q_params.append(f"%{search_q}%")
+
+                    cur.execute(f"""
+                        SELECT val, COUNT(*) AS cnt FROM (
+                            SELECT origin.{g_col} AS val
+                            FROM journeys j
+                            JOIN stops origin ON j.originId = origin.id
+                            WHERE j.username IN ({placeholders}) {date_sql} {vis_sql} AND origin.{g_col} IS NOT NULL AND origin.{g_col} != ''
+                            UNION ALL
+                            SELECT destination.{g_col} AS val
+                            FROM journeys j
+                            JOIN stops destination ON j.destinationId = destination.id
+                            WHERE j.username IN ({placeholders}) {date_sql} {vis_sql} AND destination.{g_col} IS NOT NULL AND destination.{g_col} != ''
+                        )
+                        {like_sql}
+                        GROUP BY val
+                        ORDER BY cnt DESC, val ASC
+                        LIMIT 60
+                    """, q_params)
+                    results = [{'value': r[0], 'count': r[1]} for r in cur.fetchall() if r[0]]
+
+        return jsonify({'values': results})
+    except Exception as e:
+        ta.log_error(username=creator, error=e, context="api_interactive_filter_values")
+        return jsonify({'error': str(e), 'values': []}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/interactive/visual', methods=['POST'])
+def api_interactive_visual():
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    creator = session['username']
+    payload = request.get_json(silent=True) or {}
+
+    vtype = payload.get('visual_type')
+    users = payload.get('users') or [creator]
+    start_date = (payload.get('start_date') or '').strip()
+    end_date = (payload.get('end_date') or '').strip()
+    filters = payload.get('filters') or []
+    lite = bool(payload.get('lite_version', False))
+    g_type = payload.get('grouping_type', 'time_of_day')
+
+    conn = ta.init_db()
+    try:
+        ta.AUTH_USER = creator
+        cur = conn.cursor()
+        cur.execute("SELECT access_token, followed_users, trusted_users, followers FROM user_login_data WHERE owner = ?", (creator,))
+        row = cur.fetchone()
+        api_token = row[0] if row else ''
+        if row:
+            ta.FOLLOWED_USERS = set(json.loads(row[1])) if row[1] else set()
+            ta.TRUSTED_USERS = set(json.loads(row[2])) if row[2] else set()
+            ta.FOLLOWERS_USERS = set(json.loads(row[3])) if row[3] else set()
+
+        filename = None
+        folder = None
+
+        with ta.interactive_filter_context(conn, users, start_date, end_date, filters):
+            if vtype == 'polyline':
+                folder = 'polylines'
+                filename = ta.create_polyline(conn, api_token, usernames=users, start_date=start_date, end_date=end_date, lite_version=lite)
+            elif vtype == 'stops_map':
+                folder = 'polylines'
+                filename = ta.create_stops_map(conn, usernames=users, start_date=start_date, end_date=end_date, lite_version=lite)
+            elif vtype == 'timeline':
+                folder = 'timelines'
+                filename = ta.create_timeline(conn, usernames=users, start_date=start_date, end_date=end_date)
+            elif vtype == 'ganglinie':
+                folder = 'gang_linien'
+                filename = ta.create_ganglinie_plot(username=users[0], grouping_type=g_type, conn=conn, start_date=start_date, end_date=end_date)
+            elif vtype == 'delay_plot':
+                folder = 'verspaetungs_plots'
+                files = ta.create_verspaetungs_verteilungen_plot(users[0], conn=conn, start_date=start_date, end_date=end_date)
+                filename = files[0] if files else None
+
+        if not filename or not folder:
+            return jsonify({'error': 'Für diese Auswahl konnten keine Daten visualisiert werden.'}), 404
+
+        move_to_user_dir(creator, filename, folder)
+        return jsonify({
+            'filename': filename,
+            'view_url': f"/files/view/{folder}/{filename}",
+            'download_url': f"/files/download/{folder}/{filename}"
+        })
+    except Exception as e:
+        ta.log_error(username=creator, error=e, context=f"api_interactive_visual ({vtype})")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/interactive/status_detail/<int:status_id>')
+def api_interactive_status_detail(status_id):
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    conn = ta.init_db()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT j.*, o.stopName as originName, d.stopName as destName
+        FROM journeys j
+        LEFT JOIN stops o ON j.originId = o.id
+        LEFT JOIN stops d ON j.destinationId = d.id
+        WHERE j.statusId = ?
+    """, (status_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({'error': 'Fahrt nicht in Datenbank gefunden.'}), 404
+    d = dict(row)
+    inter = []
+    if d.get('interStops'):
+        try:
+            inter = json.loads(d['interStops'])
+        except Exception:
+            pass
+
+    logged_user = session.get('username')
+    is_own_status = bool(logged_user and (d.get('username') == logged_user or is_admin_user(logged_user)))
+
+    return jsonify({
+        'journey': d,
+        'inter_stops': inter,
+        'is_own_status': is_own_status,
+        'logged_in_user': logged_user
+    })
+
+
+@app.route('/api/interactive/export_table', methods=['POST'])
+def api_interactive_export_table():
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    creator = session['username']
+    payload = request.get_json(silent=True) or {}
+    mode = payload.get('mode', 'user')
+    users = payload.get('users') or [creator]
+    start_date = (payload.get('start_date') or '').strip()
+    end_date = (payload.get('end_date') or '').strip()
+    sheet_cfg = payload.get('sheet_config') or {'type': 'grouped', 'args': ['category'], 'sheet_name': 'Export'}
+    filters = payload.get('filters') or []
+
+    conn = ta.init_db()
+    try:
+        ta.AUTH_USER = creator
+        with ta.interactive_filter_context(conn, users, start_date, end_date, filters):
+            if mode == 'shared':
+                fname = ta.create_shared_excel_file(conn, usernames=users, start_date=start_date, end_date=end_date, custom_settings={'shared_sheets': [sheet_cfg]})
+                folder = 'shared'
+            else:
+                fname = ta.create_user_excel_file(conn, username=users[0], start_date=start_date, end_date=end_date, create_picture=False, custom_settings={'user_sheets': [sheet_cfg]})
+                folder = 'user'
+        move_to_user_dir(creator, fname, folder)
+        return jsonify({'download_url': f"/files/download/{folder}/{fname}"})
+    except Exception as e:
+        ta.log_error(username=creator, error=e, context=f"api_interactive_export_table ({mode})")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+# ==========================================
+# KI-DATENBANK-ASSISTENT ROUTEN (/ai)
+# ==========================================
+
+@app.route('/ai')
+def ai_page():
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    username = session['username']
+
+    conn = ta.init_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT followed_users, trusted_users, followers FROM user_login_data WHERE owner = ?", (username,))
+    row = cursor.fetchone()
+
+    available_users = set()
+    if row:
+        for item in row:
+            if item:
+                try:
+                    parsed = json.loads(item)
+                    if isinstance(parsed, list):
+                        available_users.update(parsed)
+                except Exception:
+                    pass
+    cursor.execute("SELECT username FROM users WHERE username IS NOT NULL")
+    for r in cursor.fetchall():
+        if r[0]:
+            available_users.add(r[0])
+    cursor.execute("SELECT gemini_api_key FROM user_login_data WHERE owner = ?", (username,))
+    byok_row = cursor.fetchone()
+    has_byok = bool(byok_row and byok_row[0] and str(byok_row[0]).strip())
+    is_admin = is_admin_user(username)
+    rate_status = ta.get_rate_limit_status(conn, username, is_admin=is_admin)
+
+    conn.close()
+
+    has_gemini_key = bool(get_env_val('GEMINI_API_KEY'))
+
+    return render_template(
+        'ai.html',
+        username=username,
+        available_users=sorted(list(available_users)),
+        has_gemini_key=has_gemini_key,
+        has_byok=has_byok,
+        is_admin=is_admin,
+        rate_status=rate_status
+    )
+
+
+@app.route('/api/ai/set_key', methods=['POST'])
+def api_ai_set_key():
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    if not is_admin_user(session['username']):
+        return jsonify({'error': 'Nur Administratoren dürfen den globalen Instanz-Key in der .env ändern.'}), 403
+    payload = request.get_json(silent=True) or {}
+    key = (payload.get('gemini_api_key') or '').strip()
+    if not key:
+        return jsonify({'success': False, 'error': 'Kein API-Key angegeben.'}), 400
+    save_env_val('GEMINI_API_KEY', key)
+    return jsonify({'success': True})
+
+
+@app.route('/api/ai/byok/save', methods=['POST'])
+def api_ai_byok_save():
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    username = session['username']
+    payload = request.get_json(silent=True) or {}
+    key = (payload.get('gemini_api_key') or '').strip()
+    if not key:
+        return jsonify({'success': False, 'error': 'Kein API-Key angegeben.'}), 400
+
+    conn = ta.init_db()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE user_login_data SET gemini_api_key = ? WHERE owner = ?", (key, username))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/ai/byok/delete', methods=['POST'])
+def api_ai_byok_delete():
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    username = session['username']
+
+    conn = ta.init_db()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE user_login_data SET gemini_api_key = NULL WHERE owner = ?", (username,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/ai/byok/status')
+def api_ai_byok_status():
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    username = session['username']
+    is_admin = is_admin_user(username)
+
+    conn = ta.init_db()
+    status = ta.get_rate_limit_status(conn, username, is_admin=is_admin)
+    conn.close()
+    return jsonify({'success': True, **status})
+
+
+@app.route('/api/ai/chats')
+def api_ai_chats():
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    username = session['username']
+    conn = ta.init_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, title, selected_users, start_date, end_date, created_at, updated_at FROM ai_chats WHERE owner = ? ORDER BY updated_at DESC",
+        (username,)
+    )
+    chats = []
+    for r in cursor.fetchall():
+        chats.append({
+            'id': r[0],
+            'title': r[1],
+            'selected_users': json.loads(r[2]) if r[2] else [username],
+            'start_date': r[3] or '',
+            'end_date': r[4] or '',
+            'created_at': r[5],
+            'updated_at': r[6]
+        })
+    conn.close()
+    return jsonify({'chats': chats})
+
+
+@app.route('/api/ai/chats/<chat_id>')
+def api_ai_get_chat(chat_id):
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    username = session['username']
+    conn = ta.init_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, owner, title, selected_users, start_date, end_date, created_at, updated_at FROM ai_chats WHERE id = ?", (chat_id,))
+    chat_row = cursor.fetchone()
+    if not chat_row or chat_row[1] != username:
+        conn.close()
+        return jsonify({'error': 'Chat nicht gefunden oder keine Berechtigung'}), 404
+
+    cursor.execute(
+        "SELECT id, role, content, sql_query, row_count, sql_result, created_at FROM ai_messages WHERE chat_id = ? ORDER BY id ASC",
+        (chat_id,)
+    )
+    messages = []
+    for m in cursor.fetchall():
+        sql_res = None
+        if m[5]:
+            try:
+                sql_res = json.loads(m[5])
+            except Exception:
+                sql_res = m[5]
+        messages.append({
+            'id': m[0],
+            'role': m[1],
+            'content': m[2],
+            'sql_query': m[3],
+            'row_count': m[4],
+            'sql_result': sql_res,
+            'created_at': m[6]
+        })
+
+    meta = {
+        'id': chat_row[0],
+        'title': chat_row[2],
+        'selected_users': json.loads(chat_row[3]) if chat_row[3] else [username],
+        'start_date': chat_row[4] or '',
+        'end_date': chat_row[5] or '',
+        'created_at': chat_row[6] or '',
+        'updated_at': chat_row[7] or ''
+    }
+    conn.close()
+    return jsonify({'chat': meta, 'messages': messages})
+
+
+@app.route('/api/ai/chats/<chat_id>/export')
+def api_ai_export_chat(chat_id):
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    username = session['username']
+    conn = ta.init_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, owner, title, selected_users, start_date, end_date, created_at, updated_at FROM ai_chats WHERE id = ?", (chat_id,))
+    chat_row = cursor.fetchone()
+    if not chat_row or chat_row[1] != username:
+        conn.close()
+        return jsonify({'error': 'Chat nicht gefunden oder keine Berechtigung'}), 404
+
+    cursor.execute(
+        "SELECT id, role, content, sql_query, row_count, sql_result, created_at FROM ai_messages WHERE chat_id = ? ORDER BY id ASC",
+        (chat_id,)
+    )
+    messages = []
+    for m in cursor.fetchall():
+        sql_res = None
+        if m[5]:
+            try:
+                sql_res = json.loads(m[5])
+            except Exception:
+                sql_res = m[5]
+        messages.append({
+            'id': m[0],
+            'role': m[1],
+            'content': m[2],
+            'sql_query': m[3],
+            'row_count': m[4],
+            'sql_result': sql_res,
+            'created_at': m[6]
+        })
+
+    export_data = {
+        'export_version': '1.0',
+        'exported_at': datetime.now().isoformat(),
+        'chat': {
+            'id': chat_row[0],
+            'owner': chat_row[1],
+            'title': chat_row[2],
+            'selected_users': json.loads(chat_row[3]) if chat_row[3] else [username],
+            'start_date': chat_row[4] or '',
+            'end_date': chat_row[5] or '',
+            'created_at': chat_row[6] or '',
+            'updated_at': chat_row[7] or ''
+        },
+        'messages': messages
+    }
+    conn.close()
+
+    clean_title = re.sub(r"[^a-zA-Z0-9_\-]", "_", chat_row[2] or 'Chat')[:35]
+    filename = f"traewelling_chat_{clean_title}_{chat_id[:8]}.json"
+
+    response = jsonify(export_data)
+    response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response
+
+
+@app.route('/api/ai/chats/new', methods=['POST'])
+def api_ai_new_chat():
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    username = session['username']
+    chat_id = str(uuid.uuid4())
+    now_iso = datetime.now().isoformat()
+    conn = ta.init_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO ai_chats (id, owner, title, selected_users, start_date, end_date, created_at, updated_at)
+           VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)""",
+        (chat_id, username, "Neuer Chat", json.dumps([username]), now_iso, now_iso)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'chat_id': chat_id, 'title': 'Neuer Chat'})
+
+
+@app.route('/api/ai/chats/<chat_id>', methods=['DELETE'])
+def api_ai_delete_chat(chat_id):
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    username = session['username']
+    conn = ta.init_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT owner FROM ai_chats WHERE id = ?", (chat_id,))
+    row = cursor.fetchone()
+    if not row or row[0] != username:
+        conn.close()
+        return jsonify({'error': 'Chat nicht gefunden oder keine Berechtigung'}), 404
+
+    cursor.execute("DELETE FROM ai_messages WHERE chat_id = ?", (chat_id,))
+    cursor.execute("DELETE FROM ai_chats WHERE id = ?", (chat_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/ai/chat', methods=['POST'])
+def api_ai_chat():
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    username = session['username']
+    payload = request.get_json(silent=True) or {}
+    message = (payload.get('message') or '').strip()
+    if not message:
+        return jsonify({'success': False, 'error': 'Keine Nachricht eingegeben.'}), 400
+
+    if message.lower() in ('koch kaffee', 'brew coffee', '/coffee', 'kaffee'):
+        err_msg = "418 I'm a teapot: Ich bin eine Bahn-Datenbank, keine Kaffeemaschine! 🫖"
+        ta.log_error(username=username, error_type="HTTP_418", error_message=err_msg, context=f"Fast-Path Teapot ({message})")
+        return jsonify({
+            'success': False,
+            'is_teapot': True,
+            'error': err_msg
+        }), 418
+
+    chat_id = (payload.get('chat_id') or '').strip()
+    users = payload.get('users') or [username]
+    start_date = (payload.get('start_date') or '').strip()
+    end_date = (payload.get('end_date') or '').strip()
+
+    conn = ta.init_db()
+    cursor = conn.cursor()
+
+    if not chat_id:
+        chat_id = str(uuid.uuid4())
+        now_iso = datetime.now().isoformat()
+        cursor.execute(
+            """INSERT INTO ai_chats (id, owner, title, selected_users, start_date, end_date, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (chat_id, username, "Neuer Chat", json.dumps(users), start_date or None, end_date or None, now_iso, now_iso)
+        )
+        conn.commit()
+    else:
+        cursor.execute("SELECT owner FROM ai_chats WHERE id = ?", (chat_id,))
+        row = cursor.fetchone()
+        if not row:
+            now_iso = datetime.now().isoformat()
+            cursor.execute(
+                """INSERT INTO ai_chats (id, owner, title, selected_users, start_date, end_date, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (chat_id, username, "Neuer Chat", json.dumps(users), start_date or None, end_date or None, now_iso, now_iso)
+            )
+            conn.commit()
+        elif row[0] != username:
+            conn.close()
+            return jsonify({'error': 'Keine Berechtigung für diesen Chat'}), 403
+
+    is_admin = is_admin_user(username)
+    try:
+        res = ta.process_ai_chat_turn(
+            conn=conn,
+            creator=username,
+            chat_id=chat_id,
+            user_message=message,
+            selected_users=users,
+            start_date=start_date,
+            end_date=end_date,
+            is_admin=is_admin
+        )
+        if res.get('is_teapot'):
+            return jsonify(res), 418
+        return jsonify(res)
+    except ta.RateLimitExceededError as rle:
+        return jsonify({'success': False, 'error': str(rle), 'rate_limited': True}), 429
+    except Exception as e:
+        tb_str = traceback.format_exc()
+        ta.log_error(
+            username=username,
+            error=e,
+            traceback_str=tb_str,
+            context=f"api_ai_chat route (message: {message[:50]})",
+            conn=conn
+        )
+        return jsonify({'success': False, 'error': 'Interner Serverfehler: ' + str(e)}), 500
+    finally:
+        conn.close()
+
+#tee_beutel
+
+@app.route('/wp-admin')
+@app.route('/wp-login.php')
+@app.route('/.env')
+def teapot_trap():
+    return jsonify({'error': "I'm a teapot"}), 418
+
+@app.route('/coffee')
+@app.route('/kaffee')
+def brew_coffee():
+    try:
+        username = session['username']
+    except:
+        username = 'Gast'
+
+    ta.log_error(username=username, error_type="HTTP_418", error_message="418 I'm a teapot",
+                 context=f"Entschuldigung, dieser Server läuft ausschließlich auf <b>tee_beutel</b>-Basis und kann keinen Kaffee kochen")
+
+    return render_template_string("""
+        <h1>418 I'm a teapot</h1>
+        <p>Entschuldigung, dieser Server läuft ausschließlich auf <b>tee_beutel</b>-Basis und kann keinen Kaffee kochen.</p>
+        <p><a href="/">Zurück zum Bahnhof</a></p>
+    """), 418
+
+
+
 if __name__ == '__main__':
     conn = ta.init_db()
-    app.run(host='0.0.0.0', port=8080, debug=True, ssl_context= 'adhoc')
+    # Vorher: app.run(host='0.0.0.0', port=8080, debug=True, ssl_context= 'adhoc')
+    app.run(host='127.0.0.1', port=8080, debug=False)

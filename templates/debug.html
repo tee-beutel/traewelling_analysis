@@ -306,6 +306,49 @@
             </details>
         </div>
 
+        <!-- 10. Fehlerprotokoll (Error Log) -->
+        <div class="card" data-section-card="10">
+            <details>
+                <summary>10. Fehlerprotokoll (Error Log) (<span class="section-count">{{ check10_errors|length }}</span> protokolliert)</summary>
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+                    <p style="margin: 0; color: #666; font-size: 13px;">
+                        Zeigt die neuesten protokollierten Fehler aus der Datenbank-Tabelle <code>error_log</code> an (wann, welcher User, welcher Fehler).
+                    </p>
+                    {% if check10_errors|length > 0 %}
+                    <button class="btn btn-mass" style="margin: 0;" onclick="clearErrorLogs()">🗑️ Fehlerprotokoll leeren</button>
+                    {% endif %}
+                </div>
+
+                {% for item in check10_errors %}
+                <div class="item-row" id="row-error-{{ item.id }}" data-user="{{ item.username if item.username else '' }}" style="flex-direction: column; align-items: flex-start; gap: 6px;">
+                    <div style="display: flex; justify-content: space-between; width: 100%; align-items: center; flex-wrap: wrap; gap: 8px;">
+                        <div>
+                            <span style="background: #e63900; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold;">{{ item.error_type }}</span>
+                            <strong style="margin-left: 8px;">👤 {{ item.username or 'System / Unbekannt' }}</strong>
+                            <small style="color: #666; margin-left: 8px;">🕒 {{ item.timestamp }}</small>
+                        </div>
+                        {% if item.context %}
+                        <small style="background: #eef5fa; color: #004488; padding: 2px 6px; border-radius: 4px; font-family: monospace;">{{ item.context }}</small>
+                        {% endif %}
+                    </div>
+                    <div style="font-family: monospace; font-size: 12px; color: #c00; word-break: break-word; background: #fff5f5; padding: 6px 10px; border-radius: 4px; width: 100%; box-sizing: border-box; border: 1px solid #ffd0d0;">
+                        {{ item.error_message }}
+                    </div>
+                    {% if item.traceback %}
+                    <details style="width: 100%; margin-top: 5px; background: #222; color: #eee; border-radius: 4px; border: 1px solid #444;">
+                        <summary style="color: #bbb; font-size: 12px; padding: 4px 8px; cursor: pointer;">Stacktrace / Traceback anzeigen</summary>
+                        <pre style="margin: 0; padding: 8px; font-size: 11px; white-space: pre-wrap; overflow-x: auto; color: #ff8888;">{{ item.traceback }}</pre>
+                    </details>
+                    {% endif %}
+                </div>
+                {% else %}
+                <p style="color: #3cb44b; margin: 10px 0;">✅ Keine protokollierten Fehler in der Datenbank vorhanden.</p>
+                {% endfor %}
+
+            </details>
+        </div>
+
     <!-- Neuer Bereich: Einzelnen Status neu laden -->
 <div class="card mb-4">
     <div class="card-header bg-primary text-white">
@@ -583,6 +626,21 @@ document.getElementById('reloadStatusForm').addEventListener('submit', function(
                 }
             })
             .catch(err => console.error("Fehler bei fetchQueue:", err));
+        }
+
+        function clearErrorLogs() {
+            if (!confirm("Möchtest du wirklich alle Fehlereinträge aus dem Errorlog in der Datenbank löschen?")) return;
+            fetch('/debug/clear_errors', { method: 'POST' })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    alert(data.message);
+                    location.reload();
+                } else {
+                    alert("Fehler: " + (data.message || data.error));
+                }
+            })
+            .catch(err => alert("Netzwerkfehler: " + err));
         }
 
         function stopQueueTask(taskId) {
