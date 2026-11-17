@@ -6,6 +6,7 @@ import requests
 import uuid
 import threading
 import json
+import math
 import shutil
 from datetime import datetime, timedelta
 from flask import Flask, request, session, redirect, url_for, render_template, send_from_directory, abort, jsonify, render_template_string
@@ -265,7 +266,44 @@ def run_generation_task(task_id, creator, api_token, selected_users, start_date,
                     else:
                         log(f'Lade bestehende Daten für {user} aus der Datenbank...')
 
-                    ta.fetch_data_to_db(user, conn=conn, api_token=api_token, reload_all=False, log_callback=log, update_db=options.get('update_db', True))
+                    def on_user_progress(p):
+                        check_stop()
+                        if task_id not in TASKS:
+                            return
+                        s_curr = p.get('step_current', 0)
+                        s_tot = p.get('step_total', 0)
+                        s_idx = p.get('step_index', 0)
+                        s_pct = p.get('step_percent')
+                        if s_pct is None:
+                            s_pct = round((s_curr / s_tot) * 100) if s_tot > 0 else (min(90, s_curr * 15) if s_idx == 1 else 100)
+                        overall_pct = round((((idx) * 4 + (s_idx - 1) + (s_pct / 100.0)) / (total * 4)) * 100)
+                        overall_pct = max(0, min(100, overall_pct))
+
+                        rem_val = p.get('rate_limit_remaining', 500)
+                        max_limit = p.get('rate_limit_max', max(500, int(rem_val)))
+                        TASKS[task_id]['progress'] = {
+                            'user_index': idx + 1,
+                            'user_total': total,
+                            'current_user': user,
+                            'step_index': s_idx,
+                            'step_name': p.get('step_name', ''),
+                            'overall_percent': overall_pct,
+                            'step_current': s_curr,
+                            'step_total': s_tot,
+                            'step_percent': s_pct,
+                            'step_detail': p.get('step_detail', ''),
+                            'rate_limit_remaining': rem_val,
+                            'rate_limit_max': max_limit,
+                            'rate_limit_waiting': p.get('rate_limit_waiting', False),
+                            'rate_limit_sleep_remaining': p.get('rate_limit_sleep_remaining', 0),
+                            'eta_seconds': p.get('eta_seconds'),
+                            'eta_based_on_history': p.get('eta_based_on_history', False),
+                            'eta_sample_count': p.get('eta_sample_count', 0)
+                        }
+
+                    ta.fetch_data_to_db(user, conn=conn, api_token=api_token, reload_all=False,
+                                        log_callback=log, update_db=options.get('update_db', True),
+                                        progress_callback=on_user_progress)
 
                     if ta.check_for_user_journeys(conn, user, start_date=start_date, end_date=end_date):
 
@@ -376,6 +414,12 @@ def run_generation_task(task_id, creator, api_token, selected_users, start_date,
 
             log('\n✅ Alle Auswertungen erfolgreich abgeschlossen!')
             TASKS[task_id]['status'] = 'completed'
+            if 'progress' in TASKS[task_id]:
+                TASKS[task_id]['progress']['overall_percent'] = 100
+                TASKS[task_id]['progress']['step_percent'] = 100
+                TASKS[task_id]['progress']['step_name'] = 'Abgeschlossen'
+                TASKS[task_id]['progress']['step_detail'] = 'Alle Schritte erfolgreich abgeschlossen.'
+                TASKS[task_id]['progress']['eta_seconds'] = 0
 
         except StopTaskException as e:
             log(f'\n{str(e)}', ignore_stop=True)
@@ -497,7 +541,10 @@ def run_debug_task(task_id, username, fix_type):
 def index():
     username = session.get('username')
     if username:
-        return render_template('index.html', logged_in=True, username=username)
+        conn = ta.init_db()
+        is_admin = is_admin_user(username)
+        sync_users = ta.get_users_sync_overview(conn, username, is_admin=is_admin)
+        return render_template('index.html', logged_in=True, username=username, sync_users=sync_users, is_admin=is_admin)
 
     cid, csecret, red_uri = get_oauth_config()
     has_oauth = bool(cid and csecret and red_uri)
@@ -795,6 +842,7 @@ def start_generation():
     if not row or not row[0]: return jsonify({'error': 'Kein Token'}), 401
     
     task_id = str(uuid.uuid4())
+    source = request.form.get('source', 'dashboard')
     TASKS[task_id] = {
         'status': 'running', 
         'logs': ['Prozess in Warteschlange eingereiht...'],
@@ -802,8 +850,28 @@ def start_generation():
         'stop_requested': False,
         'creator': username,
         'type': 'Auswertung',
+        'source': source,
         'target_users': selected_users,
-        'created_at': datetime.now().strftime('%H:%M:%S')
+        'created_at': datetime.now().strftime('%H:%M:%S'),
+        'progress': {
+            'user_index': 1,
+            'user_total': len(selected_users),
+            'current_user': selected_users[0],
+            'step_index': 0,
+            'step_name': 'Initialisierung...',
+            'overall_percent': 0,
+            'step_current': 0,
+            'step_total': 0,
+            'step_percent': 0,
+            'step_detail': 'Warte auf Start...',
+            'rate_limit_remaining': 500,
+            'rate_limit_max': 500,
+            'rate_limit_waiting': False,
+            'rate_limit_sleep_remaining': 0,
+            'eta_seconds': None,
+            'eta_based_on_history': False,
+            'eta_sample_count': 0
+        }
     }
 
     thread = threading.Thread(target=run_generation_task, args=(task_id, username, row[0], selected_users, start_date, end_date, options))
@@ -871,7 +939,61 @@ def delete_category():
 
 @app.route('/task_status/<task_id>')
 def task_status(task_id):
-    return jsonify(TASKS.get(task_id, {'status': 'error', 'logs': ['Task nicht gefunden'], 'new_files': []}))
+    if task_id not in TASKS:
+        return jsonify({'status': 'error', 'logs': ['Task nicht gefunden'], 'new_files': []})
+    task_data = dict(TASKS[task_id])
+    with queue_lock:
+        is_in_queue = task_id in WAITING_QUEUE
+        is_waiting = is_in_queue and (len(WAITING_QUEUE) > 0 and WAITING_QUEUE[0] != task_id)
+        queue_pos = WAITING_QUEUE.index(task_id) if is_in_queue else 0
+        total_waiting = max(0, len(WAITING_QUEUE) - 1)
+
+    task_data['is_waiting'] = is_waiting
+    task_data['queue_pos'] = queue_pos
+    task_data['total_waiting'] = total_waiting
+    return jsonify(task_data)
+
+@app.route('/api/active_task')
+def get_active_task():
+    if 'username' not in session:
+        return jsonify({'active': False})
+    username = session['username']
+
+    with queue_lock:
+        queue_snapshot = list(WAITING_QUEUE)
+
+    for tid, tinfo in reversed(list(TASKS.items())):
+        if tinfo.get('creator') == username and tinfo.get('status') in ('running', 'waiting'):
+            is_in_queue = tid in queue_snapshot
+            is_waiting = is_in_queue and (len(queue_snapshot) > 0 and queue_snapshot[0] != tid)
+            queue_pos = queue_snapshot.index(tid) if is_in_queue else 0
+            total_waiting = max(0, len(queue_snapshot) - 1)
+
+            task_copy = dict(tinfo)
+            task_copy['is_waiting'] = is_waiting
+            task_copy['queue_pos'] = queue_pos
+            task_copy['total_waiting'] = total_waiting
+
+            return jsonify({
+                'active': True,
+                'task_id': tid,
+                'task': task_copy,
+                'is_waiting': is_waiting,
+                'queue_pos': queue_pos,
+                'total_waiting': total_waiting
+            })
+
+    return jsonify({'active': False})
+
+@app.route('/api/sync_users')
+def api_sync_users():
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    conn = ta.init_db()
+    username = session['username']
+    is_admin = is_admin_user(username)
+    users_overview = ta.get_users_sync_overview(conn, username, is_admin=is_admin)
+    return jsonify({'users': users_overview})
 
 @app.route('/files/<action>/<folder>/<filename>')
 def handle_file(action, folder, filename):
@@ -1726,6 +1848,28 @@ def api_interactive_filter_values():
                             pass
                 results = [{'value': val, 'count': cnt} for val, cnt in stop_counter.most_common(60)]
 
+            elif col == 'stop_via':
+                from collections import Counter
+                stop_counter = Counter()
+                cur.execute(f"""
+                    SELECT j.interStops
+                    FROM journeys j
+                    WHERE j.username IN ({placeholders}) {date_sql} {vis_sql}
+                      AND j.interStops IS NOT NULL AND j.interStops != ''
+                """, base_params)
+                q_low = search_q.lower()
+                for (inter_json,) in cur.fetchall():
+                    if inter_json:
+                        try:
+                            stops_list = json.loads(inter_json)
+                            if isinstance(stops_list, list):
+                                for s in stops_list:
+                                    if s and (not q_low or q_low in s.lower()):
+                                        stop_counter[s] += 1
+                        except Exception:
+                            pass
+                results = [{'value': val, 'count': cnt} for val, cnt in stop_counter.most_common(60)]
+
             elif col.startswith('geo_'):
                 g_col = col.replace('geo_', '')
                 if g_col in ta.AVAILABLE_GEO_COLUMNS:
@@ -2076,6 +2220,183 @@ def api_ai_get_chat(chat_id):
     }
     conn.close()
     return jsonify({'chat': meta, 'messages': messages})
+
+
+@app.route('/api/ai/chat/backup_latest', methods=['GET'])
+def api_ai_chat_backup_latest():
+    """Backup-Endpunkt: Gibt NUR den Antworttext der letzten KI-Nachricht aus der DB zurück (ohne SQL-Query/Result)."""
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    username = session['username']
+    chat_id = (request.args.get('chat_id') or '').strip()
+
+    conn = ta.init_db()
+    cursor = conn.cursor()
+    try:
+        # Falls currentChatId beim ersten Request im Frontend noch null war, neuesten Chat des Users holen
+        if not chat_id:
+            cursor.execute(
+                "SELECT id, title FROM ai_chats WHERE owner = ? ORDER BY updated_at DESC LIMIT 1",
+                (username,)
+            )
+            chat_row = cursor.fetchone()
+            if not chat_row:
+                return jsonify({'success': False, 'error': 'Kein Chat gefunden.'}), 404
+            chat_id, chat_title = chat_row[0], chat_row[1]
+        else:
+            cursor.execute(
+                "SELECT id, title FROM ai_chats WHERE id = ? AND owner = ?",
+                (chat_id, username)
+            )
+            chat_row = cursor.fetchone()
+            if not chat_row:
+                return jsonify({'success': False, 'error': 'Chat nicht gefunden oder keine Berechtigung.'}), 404
+            chat_id, chat_title = chat_row[0], chat_row[1]
+
+        # Nur den reinen Text (content) der neuesten Model-Antwort laden (kein sql_query, kein sql_result!)
+        cursor.execute(
+            """SELECT id, content, created_at 
+               FROM ai_messages 
+               WHERE chat_id = ? AND role = 'model' 
+               ORDER BY id DESC LIMIT 1""",
+            (chat_id,)
+        )
+        msg_row = cursor.fetchone()
+        if not msg_row:
+            return jsonify({'success': False, 'error': 'Noch keine KI-Antwort in der Datenbank gespeichert.'}), 404
+
+        return jsonify({
+            'success': True,
+            'is_backup': True,
+            'chat_id': chat_id,
+            'title': chat_title,
+            'message_id': msg_row[0],
+            'answer': msg_row[1] or '',
+            'created_at': msg_row[2]
+        })
+    except Exception as e:
+        ta.log_error(username=username, error=e, context="api_ai_chat_backup_latest", conn=conn)
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/ai/chats/<chat_id>/backup_messages', methods=['GET'])
+def api_ai_get_chat_backup(chat_id):
+    """Backup-Endpunkt für ganze Chats: Lädt alle Nachrichten eines Chats OHNE SQL-Queries und SQL-Ergebnisse."""
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    username = session['username']
+    conn = ta.init_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT id, owner, title, selected_users, start_date, end_date, created_at, updated_at FROM ai_chats WHERE id = ?",
+            (chat_id,)
+        )
+        chat_row = cursor.fetchone()
+        if not chat_row or chat_row[1] != username:
+            return jsonify({'error': 'Chat nicht gefunden oder keine Berechtigung'}), 404
+
+        cursor.execute(
+            "SELECT id, role, content, created_at FROM ai_messages WHERE chat_id = ? ORDER BY id ASC",
+            (chat_id,)
+        )
+        messages = [
+            {
+                'id': m[0],
+                'role': m[1],
+                'content': m[2] or '',
+                'sql_query': None,
+                'row_count': None,
+                'sql_result': None,
+                'created_at': m[3]
+            }
+            for m in cursor.fetchall()
+        ]
+        meta = {
+            'id': chat_row[0],
+            'title': chat_row[2],
+            'selected_users': json.loads(chat_row[3]) if chat_row[3] else [username],
+            'start_date': chat_row[4] or '',
+            'end_date': chat_row[5] or '',
+            'created_at': chat_row[6] or '',
+            'updated_at': chat_row[7] or ''
+        }
+        return jsonify({'chat': meta, 'messages': messages, 'is_backup': True})
+    finally:
+        conn.close()
+
+
+@app.route('/api/ai/messages/<int:message_id>/sql_details', methods=['GET'])
+def api_ai_message_sql_details(message_id):
+    """Versucht, die SQL-Abfrage und das SQL-Ergebnis einer einzelnen Nachricht bereinigt nachzuladen."""
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+    username = session['username']
+
+    conn = ta.init_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """SELECT m.sql_query, m.row_count, m.sql_result, c.owner
+               FROM ai_messages m
+               JOIN ai_chats c ON m.chat_id = c.id
+               WHERE m.id = ?""",
+            (message_id,)
+        )
+        row = cursor.fetchone()
+        if not row or row[3] != username:
+            return jsonify({'success': False, 'error': 'Nachricht nicht gefunden oder keine Berechtigung.'}), 404
+
+        sql_query, row_count, raw_sql_result, _ = row
+
+        def deep_sanitize(obj):
+            """Bereinigt rekursiv alle Strings, NaN/Inf-Floats und kürzt überlange Texte für sicheres JSON."""
+            if obj is None:
+                return None
+            if isinstance(obj, float):
+                if math.isnan(obj) or math.isinf(obj):
+                    return None
+                return round(obj, 4)
+            if isinstance(obj, str):
+                cleaned = "".join(ch for ch in obj if ord(ch) >= 32 or ch in "\t\n\r")
+                return cleaned[:1000] + ("..." if len(cleaned) > 1000 else "")
+            if isinstance(obj, list):
+                return [deep_sanitize(x) for x in obj]
+            if isinstance(obj, dict):
+                return {str(k): deep_sanitize(v) for k, v in obj.items()}
+            return obj
+
+        parsed_result = None
+        result_recovered = False
+        if raw_sql_result:
+            try:
+                raw_parsed = json.loads(raw_sql_result)
+                parsed_result = deep_sanitize(raw_parsed)
+                result_recovered = True
+            except Exception as parse_err:
+                ta.log_error(
+                    username=username,
+                    error=parse_err,
+                    context=f"api_ai_message_sql_details (message_id={message_id} sql_result defekt, liefere nur sql_query)",
+                    conn=conn
+                )
+                parsed_result = None
+
+        return jsonify({
+            'success': True,
+            'message_id': message_id,
+            'sql': deep_sanitize(sql_query) if sql_query else None,
+            'row_count': row_count,
+            'sql_result': parsed_result,
+            'only_query_recovered': bool(sql_query and not result_recovered and raw_sql_result)
+        })
+    except Exception as e:
+        ta.log_error(username=username, error=e, context=f"api_ai_message_sql_details ({message_id})", conn=conn)
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        conn.close()
 
 
 @app.route('/api/ai/chats/<chat_id>/export')

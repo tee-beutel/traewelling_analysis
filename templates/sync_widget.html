@@ -1,0 +1,540 @@
+<!-- 🔄 UNIFIED GLOBAL SYNC & PROGRESS WIDGET -->
+<style>
+    #globalSyncWidget {
+        width: 100%;
+        box-sizing: border-box;
+    }
+    .sync-queue-card {
+        background: #fff8e1;
+        border: 1.5px solid #ffe082;
+        border-radius: 10px;
+        padding: 16px 20px;
+        box-shadow: 0 4px 12px rgba(255, 152, 0, 0.12);
+        animation: fadeInSync 0.3s ease;
+    }
+    .sync-active-card {
+        background: #ffffff;
+        border: 1px solid #d0d7de;
+        border-radius: 10px;
+        padding: 18px 22px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.07);
+        animation: fadeInSync 0.3s ease;
+    }
+    @keyframes fadeInSync {
+        from { opacity: 0; transform: translateY(-4px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes syncPulseIcon {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.15); opacity: 0.75; }
+    }
+    .sync-pulse-anim {
+        display: inline-block;
+        animation: syncPulseIcon 1.6s ease-in-out infinite;
+    }
+    @keyframes progressStripesMove {
+        from { background-position: 40px 0; }
+        to { background-position: 0 0; }
+    }
+    .sync-striped-bar {
+        background-image: linear-gradient(
+            45deg,
+            rgba(255, 255, 255, 0.3) 25%,
+            transparent 25%,
+            transparent 50%,
+            rgba(255, 255, 255, 0.3) 50%,
+            rgba(255, 255, 255, 0.3) 75%,
+            transparent 75%,
+            transparent
+        );
+        background-size: 20px 20px;
+        animation: progressStripesMove 1s linear infinite;
+    }
+    .sync-stepper-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+        margin-bottom: 10px;
+    }
+    @media (min-width: 640px) {
+        .sync-stepper-grid {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+    }
+    .sync-step-pill {
+        padding: 6px 6px;
+        border-radius: 6px;
+        font-size: 11.5px;
+        text-align: center;
+        font-weight: 600;
+        transition: all 0.25s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        white-space: normal;
+        word-break: break-word;
+        line-height: 1.25;
+        box-sizing: border-box;
+    }
+    .sync-step-pill.pending {
+        background: #f6f8fa;
+        color: #8c959f;
+        border: 1px solid #e1e4e8;
+    }
+    .sync-step-pill.active {
+        background: #ddf4ff;
+        color: #0969da;
+        border: 1.5px solid #54aeff;
+        box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.2);
+        animation: pulseStepActive 1.8s infinite;
+    }
+    @keyframes pulseStepActive {
+        0%, 100% { box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.2); }
+        50% { box-shadow: 0 0 0 5px rgba(9, 105, 218, 0.4); }
+    }
+    .sync-step-pill.completed {
+        background: #dafbe1;
+        color: #1a7f37;
+        border: 1px solid #4ac26b;
+    }
+    .sync-btn-stop {
+        background: #dc3545;
+        color: #ffffff;
+        border: none;
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        transition: background 0.15s ease, transform 0.1s ease;
+    }
+    .sync-btn-stop:hover {
+        background: #bd2130;
+    }
+    .sync-btn-stop:active {
+        transform: scale(0.97);
+    }
+    @keyframes blinkRateLimit {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.35; }
+    }
+    .sync-blink-rate-limit {
+        animation: blinkRateLimit 1.2s ease-in-out infinite;
+    }
+</style>
+
+<div id="globalSyncWidget" style="display: none; margin: 16px 0;">
+    <!-- 1. WARTESCHLANGEN-ANSICHT (is_waiting === true) -->
+    <div id="syncQueueBox" class="sync-queue-card" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span class="sync-pulse-anim" style="font-size: 22px;">⏳</span>
+                <div>
+                    <div style="font-weight: 700; color: #b78103; font-size: 14.5px;">In der Warteschlange</div>
+                    <div style="font-size: 12.5px; color: #744210;">Server verarbeitet gerade eine andere Anfrage – bitte kurz warten...</div>
+                </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span id="syncQueueBadge" style="background: #ff9800; color: white; padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; letter-spacing: 0.3px;">
+                    Platz 1 von 1 Wartenden
+                </span>
+                <button type="button" class="sync-btn-stop" onclick="stopActiveSyncTask()">
+                    🛑 Abbrechen
+                </button>
+            </div>
+        </div>
+        <!-- Animierter Wartebalken -->
+        <div style="height: 10px; border-radius: 5px; background: #ffe082; overflow: hidden;">
+            <div class="sync-striped-bar" style="height: 100%; width: 100%; background-color: #ff9800;"></div>
+        </div>
+    </div>
+
+    <!-- 2. AKTIVES DOWNLOAD-DESIGN MIT 3 BALKEN -->
+    <div id="syncActiveBox" class="sync-active-card" style="display: none;">
+        <!-- Kopfzeile -->
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px;">
+            <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto;">
+                <span style="font-size: 18px; flex-shrink: 0;">🚀</span>
+                <span id="syncHeaderUser" style="font-weight: 700; color: #1f2328; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    Synchronisiere Account 1 von 1: @username
+                </span>
+            </div>
+            <div style="flex-shrink: 0;">
+                <button type="button" class="sync-btn-stop" onclick="stopActiveSyncTask()">
+                    🛑 Stopp
+                </button>
+            </div>
+        </div>
+
+        <!-- Restzeit / ETA Badge (volle Breite, kein Quetschen) -->
+        <div id="syncEtaBadge" style="display: block; width: 100%; box-sizing: border-box; text-align: left; padding: 6px 10px; font-size: 12px; line-height: 1.4; border-radius: 6px; margin-bottom: 12px; background: #eef5fa; color: #004488; border: 1px solid #b8d4ec;" title="">
+            <div>⏱️ Restzeit: Wird nach Schritt 1 berechnet...</div>
+        </div>
+
+        <!-- BALKEN 1: Übergeordneter Fortschritt (4-Schritte-Stepper + Gesamtbalken) -->
+        <div style="margin-bottom: 14px;">
+            <div class="sync-stepper-grid">
+                <div class="sync-step-pill pending" id="syncStepPill1">1. Statusse sammeln</div>
+                <div class="sync-step-pill pending" id="syncStepPill2">2. Haltestellen laden</div>
+                <div class="sync-step-pill pending" id="syncStepPill3">3. Zwischenhalte laden</div>
+                <div class="sync-step-pill pending" id="syncStepPill4">4. Fahrten berechnen</div>
+            </div>
+            <!-- Hauptbalken -->
+            <div style="position: relative; height: 12px; background: #e9ecef; border-radius: 6px; overflow: hidden;">
+                <div id="syncOverallBar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #004488, #28a745); transition: width 0.3s ease; border-radius: 6px;"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; font-weight: 600; color: #57606a; margin-top: 4px;">
+                <span id="syncOverallSubtitle">Gesamtfortschritt über alle User &amp; Schritte</span>
+                <span id="syncOverallPercent" style="color: #1f2328; font-size: 12px; font-weight: 700;">0%</span>
+            </div>
+        </div>
+
+        <!-- BALKEN 2: Prozess des aktuellen Schrittes -->
+        <div style="margin-bottom: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12.5px; color: #24292f; margin-bottom: 5px;">
+                <span id="syncStepDetail" style="font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 75%;">
+                    Warte auf Initialisierung...
+                </span>
+                <span id="syncStepCount" style="font-weight: 700; color: #4363d8; font-size: 12px;">0%</span>
+            </div>
+            <div style="height: 8px; background: #e9ecef; border-radius: 4px; overflow: hidden; position: relative;">
+                <div id="syncStepBar" style="height: 100%; width: 0%; background: #4363d8; transition: width 0.3s ease; border-radius: 4px;"></div>
+            </div>
+        </div>
+
+        <!-- BALKEN 3: Rate-Limit-Anzeige -->
+        <div id="syncRateLimitCard" style="background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 6px; padding: 7px 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; margin-bottom: 4px;">
+                <span id="syncRateLimitLabel" style="font-weight: 600; color: #57606a;">
+                    ⚡ API Rate-Limit: 500 / 500 Requests frei
+                </span>
+                <span id="syncRateLimitStatus" style="font-weight: 700; color: #2da44e;">Normal</span>
+            </div>
+            <div style="height: 6px; background: #e1e4e8; border-radius: 3px; overflow: hidden;">
+                <div id="syncRateLimitBar" style="height: 100%; width: 100%; background: #2da44e; transition: width 0.3s ease, background-color 0.3s ease; border-radius: 3px;"></div>
+            </div>
+            <div id="syncRateLimitWaitBanner" style="display: none; margin-top: 6px; font-size: 11.5px; color: #cf222e; font-weight: 700; text-align: center; background: #ffebe9; padding: 4px 8px; border-radius: 4px; border: 1px solid #ff8182;">
+                ⏳ Rate-Limit (HTTP 429) – Pausiere (mindestens) 30 Sekunden...
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    window.activeTraewellingTaskId = null;
+    window.syncPollTimer = null;
+    window.syncCompleteHandlers = [];
+
+    window.onGlobalSyncCompleted = function(callback) {
+        if (typeof callback === 'function') {
+            window.syncCompleteHandlers.push(callback);
+        }
+    };
+
+    window.startGlobalSyncWidget = function(taskId, onComplete) {
+        if (!taskId) return;
+        window.activeTraewellingTaskId = taskId;
+        try {
+            sessionStorage.setItem('activeTraewellingTaskId', taskId);
+        } catch (e) {}
+
+        if (typeof onComplete === 'function') {
+            window.syncCompleteHandlers.push(onComplete);
+        }
+
+        const widget = document.getElementById('globalSyncWidget');
+        if (widget) widget.style.display = 'block';
+
+        if (window.syncPollTimer) clearInterval(window.syncPollTimer);
+        pollSyncTask();
+        window.syncPollTimer = setInterval(pollSyncTask, 1000);
+    };
+
+    window.stopActiveSyncTask = function() {
+        const tid = window.activeTraewellingTaskId || sessionStorage.getItem('activeTraewellingTaskId');
+        if (!tid) return;
+        fetch('/stop_task/' + tid, { method: 'POST' })
+        .then(r => r.json())
+        .then(() => {
+            const detail = document.getElementById('syncStepDetail');
+            if (detail) detail.textContent = '🛑 Stoppe Prozess...';
+        });
+    };
+
+    function formatEta(seconds) {
+        if (seconds === null || seconds === undefined) return null;
+        if (seconds <= 0) return 'Fast fertig (< 1 Sek)...';
+        if (seconds < 60) return `ca. ${seconds} Sek`;
+        const mins = Math.floor(seconds / 60);
+        const remSec = seconds % 60;
+        return remSec > 0 ? `ca. ${mins} Min ${remSec} Sek` : `ca. ${mins} Min`;
+    }
+
+    function updateSyncWidgetUI(st) {
+        const widget = document.getElementById('globalSyncWidget');
+        const queueBox = document.getElementById('syncQueueBox');
+        const activeBox = document.getElementById('syncActiveBox');
+        if (!widget || !queueBox || !activeBox) return;
+
+        widget.style.display = 'block';
+
+        // 1. Warteschlangen-Status
+        if (st.is_waiting) {
+            queueBox.style.display = 'block';
+            activeBox.style.display = 'none';
+
+            const badge = document.getElementById('syncQueueBadge');
+            if (badge) {
+                const pos = st.queue_pos || 1;
+                const tot = Math.max(1, st.total_waiting || 1);
+                badge.textContent = `Platz ${pos} von ${tot} Wartenden`;
+            }
+            return;
+        }
+
+        // 2. Aktive Ausführung
+        queueBox.style.display = 'none';
+        activeBox.style.display = 'block';
+
+        const p = st.progress || {
+            user_index: 1, user_total: 1, current_user: (st.target_users && st.target_users[0]) || 'User',
+            step_index: 1, step_name: 'Initialisierung', overall_percent: 0,
+            step_current: 0, step_total: 0, step_percent: 0, step_detail: 'Initialisierung...',
+            rate_limit_remaining: 500, rate_limit_max: 500, rate_limit_waiting: false, eta_seconds: null
+        };
+
+        // Header User (Einzelnes Raketen-Emoji über das statische <span> im Header)
+        const headerUser = document.getElementById('syncHeaderUser');
+        if (headerUser) {
+            headerUser.textContent = `Synchronisiere Account ${p.user_index} von ${p.user_total}: @${p.current_user}`;
+        }
+
+        // ETA Badge (fließender Text ohne Quetschen)
+        const etaBadge = document.getElementById('syncEtaBadge');
+        if (etaBadge) {
+            if (p.step_index <= 1 || p.eta_seconds === null || p.eta_seconds === undefined) {
+                etaBadge.innerHTML = '<div>⏱️ Restzeit: Wird nach Schritt 1 berechnet...</div>';
+                etaBadge.title = 'In Schritt 1 werden die Statusse ermittelt. Sobald das genaue Mengengerüst steht, startet die sekundengenaue Restzeitschätzung.';
+                etaBadge.style.color = '#57606a';
+                etaBadge.style.background = '#f6f8fa';
+                etaBadge.style.borderColor = '#d0d7de';
+            } else {
+                const formattedEta = formatEta(p.eta_seconds);
+                const infoText = p.eta_based_on_history
+                    ? `Gelernt aus ${p.eta_sample_count} Läufen`
+                    : 'Erste Schätzung (Kalibrierung läuft)';
+                etaBadge.innerHTML = `<div>⏱️ <strong>Verbleibend: ${formattedEta}</strong> <span style="opacity: 0.85; margin-left: 4px;">(${infoText})</span></div>`;
+                etaBadge.title = `Berechnet aus historischen Raten & Live-Geschwindigkeit inklusive erwarteter API-Pausen (${infoText}).`;
+                etaBadge.style.color = '#0969da';
+                etaBadge.style.background = '#ddf4ff';
+                etaBadge.style.borderColor = '#54aeff';
+            }
+        }
+
+        // Stepper Pills (1..4)
+        const stepNames = [
+            '1. Statusse sammeln',
+            '2. Haltestellen laden',
+            '3. Zwischenhalte laden',
+            '4. Fahrten berechnen'
+        ];
+        for (let i = 1; i <= 4; i++) {
+            const pill = document.getElementById('syncStepPill' + i);
+            if (!pill) continue;
+            pill.classList.remove('pending', 'active', 'completed');
+
+            if (p.step_index > i || st.status === 'completed') {
+                pill.classList.add('completed');
+                pill.innerHTML = `✓ ${stepNames[i - 1]}`;
+            } else if (p.step_index === i && st.status !== 'completed') {
+                pill.classList.add('active');
+                pill.innerHTML = `⏳ ${stepNames[i - 1]}`;
+            } else {
+                pill.classList.add('pending');
+                pill.innerHTML = stepNames[i - 1];
+            }
+        }
+
+        // Balken 1: Overall Percent
+        const overallBar = document.getElementById('syncOverallBar');
+        const overallText = document.getElementById('syncOverallPercent');
+        const overallPct = (st.status === 'completed') ? 100 : (p.overall_percent || 0);
+        if (overallBar) overallBar.style.width = overallPct + '%';
+        if (overallText) overallText.textContent = overallPct + '%';
+
+        // Balken 2: Step Detail & Sub-Bar
+        const stepDetail = document.getElementById('syncStepDetail');
+        const stepCount = document.getElementById('syncStepCount');
+        const stepBar = document.getElementById('syncStepBar');
+
+        if (stepDetail) {
+            stepDetail.textContent = p.step_detail || p.step_name || 'Verarbeite...';
+        }
+
+        if (stepBar) {
+            if (st.status === 'completed') {
+                stepBar.style.width = '100%';
+                stepBar.classList.remove('sync-striped-bar');
+                if (stepCount) stepCount.textContent = '100%';
+            } else if (p.step_total > 0) {
+                stepBar.classList.remove('sync-striped-bar');
+                const sPct = p.step_percent !== undefined ? p.step_percent : Math.round((p.step_current / p.step_total) * 100);
+                stepBar.style.width = Math.min(100, Math.max(0, sPct)) + '%';
+                if (stepCount) stepCount.textContent = `${p.step_current} / ${p.step_total} (${sPct}%)`;
+            } else {
+                // Indeterminate (Schritt 1 oder ohne step_total)
+                stepBar.classList.add('sync-striped-bar');
+                const approxPct = p.step_percent || 30;
+                stepBar.style.width = approxPct + '%';
+                if (stepCount) stepCount.textContent = `${approxPct}%`;
+            }
+        }
+
+        // Balken 3: Rate-Limit-Anzeige
+        const rateLabel = document.getElementById('syncRateLimitLabel');
+        const rateStatus = document.getElementById('syncRateLimitStatus');
+        const rateBar = document.getElementById('syncRateLimitBar');
+        const waitBanner = document.getElementById('syncRateLimitWaitBanner');
+        const rateCard = document.getElementById('syncRateLimitCard');
+
+        const rem = (p.rate_limit_remaining !== undefined && p.rate_limit_remaining !== null) ? Number(p.rate_limit_remaining) : 500;
+        const maxLimit = (p.rate_limit_max !== undefined && p.rate_limit_max !== null) ? Math.max(500, Number(p.rate_limit_max), rem) : Math.max(500, rem);
+        const remPct = Math.min(100, Math.max(0, (rem / maxLimit) * 100));
+
+        if (rateLabel) {
+            rateLabel.textContent = `⚡ API Rate-Limit: ${rem} / ${maxLimit} Requests frei`;
+        }
+
+        let barColor = '#2da44e';
+        let statusText = 'Normal';
+        let statusColor = '#2da44e';
+
+        if (rem < 20) {
+            barColor = '#cf222e';
+            statusText = 'Kritisch';
+            statusColor = '#cf222e';
+        } else if (rem <= 100) {
+            barColor = '#bf8700';
+            statusText = 'Mäßig';
+            statusColor = '#bf8700';
+        }
+
+        if (rateBar) {
+            rateBar.style.width = remPct + '%';
+            rateBar.style.backgroundColor = barColor;
+        }
+        if (rateStatus) {
+            rateStatus.textContent = statusText;
+            rateStatus.style.color = statusColor;
+        }
+
+        if (p.rate_limit_waiting) {
+            if (waitBanner) {
+                waitBanner.style.display = 'block';
+                const sRem = p.rate_limit_sleep_remaining || 30;
+                waitBanner.textContent = `⏳ Rate-Limit (HTTP 429) – Pausiere ${sRem} Sekunden...`;
+            }
+            if (rateCard) rateCard.classList.add('sync-blink-rate-limit');
+        } else {
+            if (waitBanner) waitBanner.style.display = 'none';
+            if (rateCard) rateCard.classList.remove('sync-blink-rate-limit');
+        }
+    }
+
+    function pollSyncTask() {
+        const tid = window.activeTraewellingTaskId || sessionStorage.getItem('activeTraewellingTaskId');
+        if (!tid) {
+            if (window.syncPollTimer) clearInterval(window.syncPollTimer);
+            return;
+        }
+
+        fetch('/task_status/' + tid)
+        .then(r => r.json())
+        .then(st => {
+            if (st.status === 'error' && (!st.logs || st.logs.includes('Task nicht gefunden'))) {
+                cleanupSyncTask();
+                return;
+            }
+
+            updateSyncWidgetUI(st);
+
+            if (st.status === 'completed' || st.status === 'stopped' || st.status === 'error') {
+                cleanupSyncTask();
+                const handlers = [...window.syncCompleteHandlers];
+                window.syncCompleteHandlers = [];
+                handlers.forEach(fn => {
+                    try { fn(st); } catch (e) { console.error('Sync complete handler error:', e); }
+                });
+
+                // Nach kurzer Zeit ausblenden falls completed/stopped
+                setTimeout(() => {
+                    const widget = document.getElementById('globalSyncWidget');
+                    if (widget && st.status === 'completed') {
+                        widget.style.transition = 'opacity 0.6s ease';
+                        widget.style.opacity = '0';
+                        setTimeout(() => {
+                            widget.style.display = 'none';
+                            widget.style.opacity = '1';
+                        }, 600);
+                    }
+                }, 4000);
+            }
+        })
+        .catch(err => {
+            console.warn('Sync poll fetch error:', err);
+        });
+    }
+
+    function cleanupSyncTask() {
+        if (window.syncPollTimer) {
+            clearInterval(window.syncPollTimer);
+            window.syncPollTimer = null;
+        }
+        window.activeTraewellingTaskId = null;
+        try {
+            sessionStorage.removeItem('activeTraewellingTaskId');
+        } catch (e) {}
+    }
+
+    window.checkActiveSyncTask = function(onComplete) {
+        if (typeof onComplete === 'function') {
+            window.syncCompleteHandlers.push(onComplete);
+        }
+
+        fetch('/api/active_task')
+        .then(r => r.json())
+        .then(data => {
+            if (data.active && data.task_id) {
+                // Bei dashboard.html mit source === 'dashboard' übernimmt das Dashboard-Terminal
+                if (window.location.pathname.startsWith('/dashboard') && data.task && data.task.source === 'dashboard') {
+                    return;
+                }
+                window.startGlobalSyncWidget(data.task_id);
+            } else {
+                const storedTid = sessionStorage.getItem('activeTraewellingTaskId');
+                if (storedTid) {
+                    fetch('/task_status/' + storedTid)
+                    .then(r => r.json())
+                    .then(st => {
+                        if (st.status === 'running') {
+                            window.startGlobalSyncWidget(storedTid);
+                        } else {
+                            cleanupSyncTask();
+                        }
+                    })
+                    .catch(() => cleanupSyncTask());
+                }
+            }
+        })
+        .catch(() => {});
+    };
+
+    // Auto-Init bei DOMContentLoaded
+    document.addEventListener('DOMContentLoaded', function() {
+        window.checkActiveSyncTask();
+    });
+</script>

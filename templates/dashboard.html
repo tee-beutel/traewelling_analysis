@@ -2,50 +2,466 @@
 <html lang="de">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard - {{ username }} (v10)</title>
     
     <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.default.min.css" rel="stylesheet">
     
     <style>
-        body { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background-color: #f4f4f9; }
-        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        .btn { padding: 10px 15px; color: white; background-color: #004488; text-decoration: none; border-radius: 5px; border: none; cursor: pointer; font-size: 14px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; transition: background-color 0.3s ease; }
-        .btn:hover { background-color: #003366; }
-        .btn:disabled { background-color: #999; cursor: not-allowed; }
-        .btn-logout { background-color: #555; }
-        ul { list-style: none; padding: 0; margin-bottom: 20px; }
-        li { background: #eee; margin: 5px 0; padding: 10px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; transition: all 0.3s ease; }
-        
-        .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; gap: 15px; flex-wrap: wrap; }
-        .header-bar h1 { margin: 0; color: #004488; font-size: 26px; }
-        .header-nav { display: flex; gap: 8px; flex-wrap: wrap; }
+        :root {
+            --primary: #004488;
+            --primary-hover: #003366;
+            --accent: #4363d8;
+            --accent-hover: #334fb5;
+            --success: #28a745;
+            --success-hover: #218838;
+            --danger: #dc3545;
+            --danger-hover: #bd2130;
+            --warning: #ffc107;
+            --warning-hover: #e0a800;
+            --bg: #f4f6f9;
+            --card-bg: #ffffff;
+            --border: #dce3e8;
+            --text: #2c3e50;
+            --text-muted: #66788a;
+        }
 
-        .grid-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; font-weight: bold; margin-bottom: 5px; }
-        .form-group input[type="text"], .form-group input[type="date"] { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
-        
-        .ts-control { border-radius: 4px; border: 1px solid #ccc; padding: 8px; }
-        
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 24px 16px;
+            background-color: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .card {
+            background: var(--card-bg);
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+            border: 1px solid var(--border);
+            margin-bottom: 24px;
+        }
+
+        .card h2 {
+            margin-top: 0;
+            margin-bottom: 18px;
+            color: var(--primary);
+            font-size: 20px;
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 10px 16px;
+            min-height: 42px;
+            color: white;
+            background-color: var(--primary);
+            text-decoration: none;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: all 0.2s ease;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .btn:hover { background-color: var(--primary-hover); }
+        .btn:active { transform: scale(0.98); }
+        .btn:disabled { background-color: #adb5bd !important; cursor: not-allowed; transform: none; }
+        .btn-logout { background-color: #6c757d; }
+        .btn-logout:hover { background-color: #5a6268; }
+        .btn-delete-all { background-color: var(--warning); color: #212529; font-size: 13px; font-weight: 600; padding: 8px 14px; min-height: 38px; }
+        .btn-delete-all:hover { background-color: var(--warning-hover); }
+        .btn-delete-cat { background-color: var(--danger); color: white; font-size: 12px; padding: 6px 12px; min-height: 32px; border-radius: 6px; }
+        .btn-delete-cat:hover { background-color: var(--danger-hover); }
+
+        /* Header Bar */
+        .header-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        .header-bar h1 {
+            margin: 0;
+            color: var(--primary);
+            font-size: 24px;
+            font-weight: 700;
+        }
+        .header-nav {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        /* Form Grid Layout */
+        .grid-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+        .form-group {
+            margin-bottom: 18px;
+        }
+        .form-group label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 6px;
+            font-size: 14px;
+            color: var(--text);
+        }
+        .form-group input[type="text"],
+        .form-group input[type="date"] {
+            width: 100%;
+            min-height: 44px;
+            padding: 10px 12px;
+            font-size: 16px; /* Prevents auto-zoom on iOS */
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: #fff;
+            color: var(--text);
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .form-group input[type="text"]:focus,
+        .form-group input[type="date"]:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(0, 68, 136, 0.15);
+            outline: none;
+        }
+
+        /* TomSelect Modern Styling */
+        .ts-wrapper.multi .ts-control {
+            min-height: 44px;
+            padding: 8px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-size: 15px;
+        }
+        .ts-wrapper.multi .ts-control > div {
+            border-radius: 6px;
+            padding: 4px 8px;
+            background: #e9f0f8;
+            color: #004488;
+            font-size: 13.5px;
+        }
+        .ts-dropdown {
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+            font-size: 15px;
+        }
+        .ts-dropdown .option {
+            padding: 10px 14px;
+            min-height: 40px;
+        }
+
+        /* Options Panel */
+        .options-panel {
+            background: #f9fbfd;
+            padding: 16px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+        }
+        .db-update-box {
+            background: #eef5fa;
+            border: 1px solid #b8d4ec;
+            border-radius: 8px;
+            padding: 12px 14px;
+            margin-bottom: 14px;
+        }
+        .checkbox-label {
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            padding: 6px 8px;
+            border-radius: 6px;
+            transition: background-color 0.15s;
+            font-size: 14px;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .checkbox-label:hover {
+            background-color: #edf2f7;
+        }
+        .checkbox-label input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--primary);
+            cursor: pointer;
+            flex-shrink: 0;
+            margin: 0;
+        }
+        .checkbox-sublabel {
+            margin-left: 28px;
+            padding: 6px 10px;
+            background: #f1f6fa;
+            border-left: 3px solid #b8d4ec;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+
         /* Collapsible Export Cards */
-        .export-group-card { background: #fdfdfd; border: 1px solid #e0e5eb; border-radius: 6px; margin-bottom: 10px; padding: 0; overflow: hidden; }
-        .export-group-card summary { font-weight: bold; font-size: 13.5px; padding: 10px 12px; background: #f3f6f9; cursor: pointer; outline: none; user-select: none; color: #2c3e50; border-bottom: 1px solid transparent; }
-        .export-group-card[open] summary { border-bottom: 1px solid #e0e5eb; }
-        .export-group-body { padding: 12px 14px; }
+        .export-group-card {
+            background: #ffffff;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 12px;
+            overflow: hidden;
+        }
+        .export-group-card summary {
+            font-weight: 600;
+            font-size: 14px;
+            padding: 12px 14px;
+            background: #f8fafc;
+            cursor: pointer;
+            outline: none;
+            user-select: none;
+            color: var(--text);
+            border-bottom: 1px solid transparent;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .export-group-card summary::-webkit-details-marker {
+            display: none;
+        }
+        .export-group-card summary::after {
+            content: '▼';
+            font-size: 10px;
+            color: var(--text-muted);
+            transition: transform 0.2s ease;
+        }
+        .export-group-card[open] summary::after {
+            transform: rotate(180deg);
+        }
+        .export-group-card[open] summary {
+            border-bottom: 1px solid var(--border);
+        }
+        .export-group-body {
+            padding: 12px 14px;
+        }
 
-        #terminalBox { display: none; margin-top: 20px; }
-        #statusLogs { height: 260px; overflow-y: scroll; font-family: 'Courier New', monospace; font-size: 13px; background: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
-        .badge-new { background-color: #28a745; color: white; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: 3px; margin-left: 8px; text-transform: uppercase; }
+        #actionBtn {
+            width: 100%;
+            margin-top: 14px;
+            min-height: 48px;
+            font-size: 16px;
+            font-weight: 600;
+            border-radius: 8px;
+            background-color: var(--primary);
+        }
 
+        /* Terminal Box */
+        #terminalBox {
+            display: none;
+            margin-top: 24px;
+        }
+        #statusLogs {
+            max-height: 280px;
+            min-height: 140px;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+            font-size: 12.5px;
+            background: #1a1e24;
+            color: #4ade80;
+            padding: 14px;
+            border-radius: 8px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .badge-new {
+            background-color: var(--success);
+            color: white;
+            font-size: 10px;
+            font-weight: bold;
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-left: 8px;
+            text-transform: uppercase;
+            display: inline-block;
+        }
+
+        /* Files Section */
+        .files-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 14px;
+            margin-bottom: 18px;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .files-card-header h2 {
+            margin: 0;
+            border: none;
+            padding: 0;
+            font-size: 20px;
+            color: var(--primary);
+        }
+        .category-header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid var(--border);
+            margin-top: 24px;
+            padding-bottom: 6px;
+            gap: 10px;
+        }
+        .category-header-row h3 {
+            border: none;
+            padding: 0;
+            margin: 0;
+            color: var(--primary);
+            font-size: 16px;
+            font-weight: 600;
+        }
+        ul.file-list {
+            list-style: none;
+            padding: 0;
+            margin: 10px 0 20px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        li.file-item {
+            background: #f8fafc;
+            border: 1px solid var(--border);
+            margin: 0;
+            padding: 12px 14px;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            transition: background-color 0.2s;
+        }
+        li.file-item:hover {
+            background: #f0f4f8;
+        }
+        .file-name-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            word-break: break-word;
+            overflow-wrap: anywhere;
+            font-size: 13.5px;
+            font-weight: 500;
+            flex: 1;
+        }
+        .file-buttons {
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+        .file-buttons .btn {
+            padding: 8px 14px;
+            min-height: 36px;
+            font-size: 13px;
+            border-radius: 6px;
+        }
+
+        /* Mobile Responsive Optimizations */
         @media (max-width: 768px) {
-            body { padding: 12px 8px; }
-            .card { padding: 15px; }
-            .header-bar { flex-direction: column; align-items: stretch; gap: 12px; }
-            .header-nav { width: 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
-            .header-nav .btn { padding: 9px 8px; font-size: 13px; width: 100%; box-sizing: border-box; }
-            .grid-layout { grid-template-columns: 1fr; gap: 12px; }
-            li { flex-direction: column; align-items: stretch; gap: 8px; }
-            li > div { display: flex; justify-content: flex-end; gap: 6px; }
+            body {
+                padding: 12px 8px;
+            }
+            .card {
+                padding: 16px 14px;
+                border-radius: 10px;
+                margin-bottom: 16px;
+            }
+            .header-bar {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 12px;
+                margin-bottom: 16px;
+            }
+            .header-bar h1 {
+                font-size: 20px;
+            }
+            .header-nav {
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 8px;
+                width: 100%;
+            }
+            .header-nav .btn {
+                width: 100%;
+                font-size: 13px;
+                padding: 8px 10px;
+                min-height: 40px;
+            }
+            .header-nav .btn-logout {
+                grid-column: span 2;
+            }
+            .grid-layout {
+                grid-template-columns: 1fr;
+                gap: 16px;
+            }
+            .options-panel {
+                padding: 12px;
+            }
+            .checkbox-label {
+                padding: 8px 6px;
+                font-size: 14px;
+            }
+            .checkbox-sublabel {
+                margin-left: 18px;
+                padding: 8px;
+            }
+            .files-card-header {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 10px;
+            }
+            .files-card-header .btn {
+                width: 100%;
+            }
+            .category-header-row {
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            li.file-item {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 10px;
+                padding: 12px;
+            }
+            .file-name-wrapper {
+                font-size: 13px;
+            }
+            .file-buttons {
+                width: 100%;
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+            }
+            .file-buttons .btn {
+                width: 100%;
+                min-height: 40px;
+                font-size: 13px;
+            }
+            .file-buttons a:only-child {
+                grid-column: span 2;
+            }
         }
     </style>
 </head>
@@ -55,11 +471,14 @@
         <div class="header-nav">
             <a href="/" class="btn" style="background-color: #4363d8;">🏠 Start</a>
             <a href="/interactive" class="btn" style="background-color: #28a745;">🔍 Interaktiv</a>
-            <a href="/settings" class="btn" style="background-color: #004488;">⚙️ Baukasten</a>
+            <a href="/settings" class="btn" style="background-color: #e67e22;">⚙️ Baukasten</a>
             <a href="/ai" class="btn" style="background-color: #6f42c1;">🤖 KI-Assistent</a>
             <a href="/logout" class="btn btn-logout">Logout</a>
         </div>
     </div>
+
+    <!-- Live Sync Widget (für auf anderen Seiten gestartete Downloads) -->
+    {% include 'sync_widget.html' %}
 
     <div class="card">
         <h2>Neue Auswertung generieren</h2>
@@ -67,11 +486,11 @@
             <div class="grid-layout">
                 <div>
                     <div class="form-group">
-                        <label>Startdatum (optional):</label>
+                        <label for="start_date">Startdatum (optional):</label>
                         <input type="date" name="start_date" id="start_date">
                     </div>
                     <div class="form-group">
-                        <label>Enddatum (optional):</label>
+                        <label for="end_date">Enddatum (optional):</label>
                         <input type="date" name="end_date" id="end_date">
                     </div>
 
@@ -85,18 +504,18 @@
                                 {% endif %}
                             {% endfor %}
                         </select>
-                        <small style="color: #666;">Klicke für bekannte User oder tippe einen neuen Namen ein und drücke Enter (Profile müssen öffentlich sein).</small>
+                        <small style="color: var(--text-muted); display: block; margin-top: 6px; font-size: 12px; line-height: 1.4;">Klicke für bekannte User oder tippe einen neuen Namen ein und drücke Enter (Profile müssen öffentlich sein).</small>
                     </div>
                 </div>
 
                 <div>
-                    <div class="form-group" style="background: #f9fbfd; padding: 14px; border-radius: 6px; border: 1px solid #dce3e8;">
-                        <label style="font-size: 15px; margin-bottom: 10px; color: #004488;">Auswahl &amp; Einstellungen</label>
+                    <div class="options-panel">
+                        <label style="font-size: 15px; margin-bottom: 12px; color: var(--primary); display: block; font-weight: 700;">Auswahl &amp; Einstellungen</label>
                         
-                        <div style="background: #eef5fa; border: 1px solid #b8d4ec; border-radius: 5px; padding: 10px; margin-bottom: 12px;">
-                            <label style="font-weight: bold; display: flex; align-items: center; gap: 8px; margin: 0; color: #004488; cursor: pointer;">
-                                <input type="checkbox" name="update_db" id="update_db" checked style="transform: scale(1.15);"> 
-                                <span>🔄 Datenbank aktualisieren <small style="font-weight: normal; color: #555;">(Neue Fahrten suchen)</small></span>
+                        <div class="db-update-box">
+                            <label class="checkbox-label" style="font-weight: 600; color: var(--primary); margin: 0;">
+                                <input type="checkbox" name="update_db" id="update_db" checked> 
+                                <span>🔄 Datenbank aktualisieren <small style="font-weight: normal; color: #555; display: block; font-size: 12px;">(Neue Fahrten via Träwelling-API abrufen)</small></span>
                             </label>
                         </div>
                         
@@ -104,14 +523,16 @@
                         <details class="export-group-card" open>
                             <summary>📊 Excel-Fahrtenbücher</summary>
                             <div class="export-group-body">
-                                <label style="font-weight: normal; display: block; margin-bottom: 8px; cursor: pointer;">
-                                    <input type="checkbox" name="gen_excel" checked> Persönliches Excel-Fahrtenbuch
+                                <label class="checkbox-label">
+                                    <input type="checkbox" name="gen_excel" checked>
+                                    <span>Persönliches Excel-Fahrtenbuch</span>
                                 </label>
-                                <label style="font-weight: normal; display: block; margin-bottom: 8px; cursor: pointer;">
-                                    <input type="checkbox" name="gen_shared_excel" checked> Gemeinsames Excel-Dashboard <small style="color: #666;">(bei mehreren Usern)</small>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" name="gen_shared_excel" checked>
+                                    <span>Gemeinsames Excel-Dashboard <small style="color: var(--text-muted);">(bei mehreren Usern)</small></span>
                                 </label>
-                                <div style="margin: 4px 0 0 22px;">
-                                    <a href="/settings" style="font-size: 12px; color: #004488; text-decoration: underline;">⚙️ Excel-Tabellenblätter &amp; Parameter anpassen</a>
+                                <div style="margin: 6px 0 2px 28px;">
+                                    <a href="/settings" style="font-size: 12.5px; color: var(--primary); text-decoration: underline; font-weight: 500;">⚙️ Excel-Tabellenblätter &amp; Parameter anpassen</a>
                                 </div>
                             </div>
                         </details>
@@ -120,19 +541,27 @@
                         <details class="export-group-card" open>
                             <summary>🗺️ Interaktive Karten</summary>
                             <div class="export-group-body">
-                                <label style="font-weight: normal; display: block; margin-bottom: 4px; cursor: pointer;">
-                                    <input type="checkbox" name="gen_map" id="gen_map" checked> Streckenkarte (Polylines)
+                                <label class="checkbox-label">
+                                    <input type="checkbox" name="gen_map" id="gen_map" checked>
+                                    <span>Streckenkarte (Polylines)</span>
                                 </label>
-                                <label id="label_gen_map_lite" style="font-weight: normal; display: block; margin-bottom: 10px; margin-left: 24px; cursor: pointer;">
-                                    <input type="checkbox" name="gen_map_lite" id="gen_map_lite"> Lite-Version <small style="color: #666;">(Mobil-optimiert: Ohne Filter & Highlighting)</small>
-                                </label>
+                                <div id="label_gen_map_lite" class="checkbox-sublabel">
+                                    <label class="checkbox-label" style="margin: 0;">
+                                        <input type="checkbox" name="gen_map_lite" id="gen_map_lite">
+                                        <span>Lite-Version <small style="color: var(--text-muted); display: block; font-size: 11.5px;">Mobil-optimiert: Ohne Filter &amp; Highlighting</small></span>
+                                    </label>
+                                </div>
                                 
-                                <label style="font-weight: normal; display: block; margin-bottom: 4px; cursor: pointer;">
-                                    <input type="checkbox" name="gen_stop_map" id="gen_stop_map" checked> Haltestellenkarte
+                                <label class="checkbox-label">
+                                    <input type="checkbox" name="gen_stop_map" id="gen_stop_map" checked>
+                                    <span>Haltestellenkarte</span>
                                 </label>
-                                <label id="label_gen_stop_map_lite" style="font-weight: normal; display: block; margin-bottom: 4px; margin-left: 24px; cursor: pointer;">
-                                    <input type="checkbox" name="gen_stop_map_lite" id="gen_stop_map_lite"> Lite-Version <small style="color: #666;">(Mobil-optimiert: Ohne Filter, Heatmap & Hub-Werte)</small>
-                                </label>
+                                <div id="label_gen_stop_map_lite" class="checkbox-sublabel">
+                                    <label class="checkbox-label" style="margin: 0;">
+                                        <input type="checkbox" name="gen_stop_map_lite" id="gen_stop_map_lite">
+                                        <span>Lite-Version <small style="color: var(--text-muted); display: block; font-size: 11.5px;">Mobil-optimiert: Ohne Filter, Heatmap &amp; Hub-Werte</small></span>
+                                    </label>
+                                </div>
                             </div>
                         </details>
 
@@ -140,14 +569,17 @@
                         <details class="export-group-card" open>
                             <summary>📈 Timelines &amp; Diagramme</summary>
                             <div class="export-group-body">
-                                <label style="font-weight: normal; display: block; margin-bottom: 8px; cursor: pointer;">
-                                    <input type="checkbox" name="gen_timeline" id="gen_timeline" checked> Interaktive Timeline (Zeitachse)
+                                <label class="checkbox-label">
+                                    <input type="checkbox" name="gen_timeline" id="gen_timeline" checked>
+                                    <span>Interaktive Timeline (Zeitachse)</span>
                                 </label>
-                                <label style="font-weight: normal; display: block; margin-bottom: 8px; cursor: pointer;">
-                                    <input type="checkbox" name="gen_time" checked> Tageszeiten (Ganglinien) <br><small style="color: #666; margin-left:22px;">(Benötigt aktiviertes persönliches Excel-Fahrtenbuch)</small>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" name="gen_time" checked>
+                                    <span>Tageszeiten (Ganglinien) <small style="color: var(--text-muted); display: block; font-size: 11.5px;">(Benötigt persönliches Excel-Fahrtenbuch)</small></span>
                                 </label>
-                                <label style="font-weight: normal; display: block; margin-bottom: 0; cursor: pointer;">
-                                    <input type="checkbox" name="gen_delay" checked> Verspätungs-Graphen
+                                <label class="checkbox-label">
+                                    <input type="checkbox" name="gen_delay" checked>
+                                    <span>Verspätungs-Graphen</span>
                                 </label>
                             </div>
                         </details>
@@ -155,43 +587,46 @@
                 </div>
             </div>
 
-            <button type="submit" class="btn" id="actionBtn" style="width: 100%; margin-top: 10px; background-color: #004488;">🚀 Auswertung starten</button>
+            <button type="submit" class="btn" id="actionBtn">🚀 Auswertung starten</button>
         </form>
 
         <div id="terminalBox">
-            <h3 style="margin-bottom: 5px;">Prozess-Log:</h3>
+            <h3 style="margin-bottom: 8px; font-size: 15px;">Prozess-Log:</h3>
             <div id="statusLogs"></div>
         </div>
     </div>
 
     <div class="card" id="filesContainer">
-        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-bottom: 15px;">
-            <h2 style="margin: 0; border: none; padding: 0;">Deine erstellten Dateien (Privat)</h2>
-            <button type="button" class="btn" id="deleteBtn" style="background-color: #ffc107; color: black; font-size: 13px; padding: 8px 12px;" onclick="deleteFiles()">🗑️ Alle Löschen</button>
+        <div class="files-card-header">
+            <h2>Deine erstellten Dateien (Privat)</h2>
+            <button type="button" class="btn btn-delete-all" id="deleteBtn" onclick="deleteFiles()">🗑️ Alle Löschen</button>
         </div>
         
         {% if files %}
             {% for group_name, group_files in files.items() %}
-                <div style="display: flex; justify-content: space-between; align-items: baseline; border-bottom: 2px solid #ddd; margin-top: 25px; padding-bottom: 5px;">
-                    <h3 class="group-header" data-group="{{ group_name }}" style="border: none; padding: 0; margin: 0; color: #004488; font-size: 18px;">{{ group_name }}</h3>
-                    <button type="button" class="btn" style="background-color: #dc3545; color: white; font-size: 11px; padding: 4px 8px;" onclick="deleteCategory('{{ group_name }}')">🗑️ Bereich löschen</button>
+                <div class="category-header-row">
+                    <h3 class="group-header" data-group="{{ group_name }}">{{ group_name }}</h3>
+                    <button type="button" class="btn btn-delete-cat" onclick="deleteCategory('{{ group_name }}')">🗑️ Bereich löschen</button>
                 </div>
-                <ul data-group-list="{{ group_name }}">
+                <ul class="file-list" data-group-list="{{ group_name }}">
                 {% for file in group_files %}
-                    <li data-filename="{{ file.name }}">
-                        <span>{{ file.name }}</span>
-                        <div>
+                    <li class="file-item" data-filename="{{ file.name }}">
+                        <div class="file-name-wrapper">
+                            <span>{% if file.name.endswith('.xlsx') %}📊{% elif 'map' in file.name %}🗺️{% else %}📈{% endif %}</span>
+                            <span>{{ file.name }}</span>
+                        </div>
+                        <div class="file-buttons">
                             {% if not file.name.endswith('.xlsx') %}
-                                <a href="/files/view/{{ file.folder }}/{{ file.name }}" target="_blank" class="btn" style="background:#4363d8; font-size:12px; margin-right:5px;">Ansehen</a>
+                                <a href="/files/view/{{ file.folder }}/{{ file.name }}" target="_blank" class="btn" style="background:#4363d8;">Ansehen</a>
                             {% endif %}
-                            <a href="/files/download/{{ file.folder }}/{{ file.name }}" class="btn" style="font-size:12px;">Download</a>
+                            <a href="/files/download/{{ file.folder }}/{{ file.name }}" class="btn">Download</a>
                         </div>
                     </li>
                 {% endfor %}
                 </ul>
             {% endfor %}
         {% else %}
-            <p id="noFilesMsg">Du hast noch keine Dateien generiert.</p>
+            <p id="noFilesMsg" style="color: var(--text-muted); margin: 10px 0;">Du hast noch keine Dateien generiert.</p>
         {% endif %}
     </div>
 
@@ -203,31 +638,31 @@
         const actionBtn = document.getElementById('actionBtn');
 
         // Tom Select initialisieren und in einer Variable speichern
-let userSelect = new TomSelect("#user-select", {
-    create: true,
-    plugins: ['remove_button'],
-    placeholder: "User auswählen oder eintippen...",
-    createFilter: function(input) { return input.trim().length > 0; }
-});
+        let userSelect = new TomSelect("#user-select", {
+            create: true,
+            plugins: ['remove_button'],
+            placeholder: "User auswählen oder eintippen...",
+            createFilter: function(input) { return input.trim().length > 0; }
+        });
 
-// Das Paste-Ereignis auf dem internen Tom-Select-Eingabefeld abfangen
-userSelect.control_input.addEventListener('paste', function(e) {
-    e.preventDefault();
+        // Das Paste-Ereignis auf dem internen Tom-Select-Eingabefeld abfangen
+        userSelect.control_input.addEventListener('paste', function(e) {
+            e.preventDefault();
 
-    // Text aus der Zwischenablage holen
-    const pastedText = (e.clipboardData || window.clipboardData).getData('text');
+            // Text aus der Zwischenablage holen
+            const pastedText = (e.clipboardData || window.clipboardData).getData('text');
 
-    // Klammern/Anführungszeichen entfernen (falls Reste einer Python-Liste im Spiel sind) und nach Komma trennen
-    const items = pastedText.replace(/[\[\]'"]/g, '').split(/,\s*/);
+            // Klammern/Anführungszeichen entfernen und nach Komma trennen
+            const items = pastedText.replace(/[\[\]'"]/g, '').split(/,\s*/);
 
-    // Jeden User einzeln als Tag hinzufügen
-    items.forEach(item => {
-        const cleanItem = item.trim();
-        if (cleanItem.length > 0) {
-            userSelect.createItem(cleanItem);
-        }
-    });
-});
+            // Jeden User einzeln als Tag hinzufügen
+            items.forEach(item => {
+                const cleanItem = item.trim();
+                if (cleanItem.length > 0) {
+                    userSelect.createItem(cleanItem);
+                }
+            });
+        });
 
         // Event-Listener für die Abhängigkeiten der Lite-Checkboxen inkl. Ausblenden
         document.getElementById('gen_map').addEventListener('change', function() {
@@ -272,7 +707,7 @@ userSelect.control_input.addEventListener('paste', function(e) {
             if (currentTaskId) return;
             
             actionBtn.innerHTML = '🛑 Stoppe Auswertung';
-            actionBtn.style.backgroundColor = '#dc3545';
+            actionBtn.style.backgroundColor = 'var(--danger)';
             actionBtn.type = 'button'; 
 
             const terminalBox = document.getElementById('terminalBox');
@@ -286,47 +721,81 @@ userSelect.control_input.addEventListener('paste', function(e) {
             terminalBox.style.display = 'block';
             statusLogs.innerHTML = 'Verbinde mit Server...<br>';
             
+            const fd = new FormData(this);
+            fd.append('source', 'dashboard');
+
             fetch('/start_generation', {
                 method: 'POST',
-                body: new FormData(this)
+                body: fd
             })
             .then(res => res.json())
             .then(data => {
                 if (data.error) {
-                    statusLogs.innerHTML += `<span style="color: red;">Fehler: ${data.error}</span>`;
+                    statusLogs.innerHTML += `<span style="color: #ff6b6b;">Fehler: ${data.error}</span>`;
                     resetActionBtn();
                     return;
                 }
                 
-                currentTaskId = data.task_id;
-                pollInterval = setInterval(() => {
-                    fetch('/task_status/' + currentTaskId)
-                    .then(res => res.json())
-                    .then(statusData => {
-                        statusLogs.innerHTML = statusData.logs.join('<br>');
-                        statusLogs.scrollTop = statusLogs.scrollHeight;
-                        
-                        if (statusData.new_files && statusData.new_files.length > 0) {
-                            statusData.new_files.forEach(file => {
-                                if (!seenFiles.has(file.name)) {
-                                    seenFiles.add(file.name);
-                                    addLiveFileToDOM(file);
-                                }
-                            });
-                        }
-                        
-                        if (statusData.status === 'completed' || statusData.status === 'error' || statusData.status === 'stopped') {
-                            clearInterval(pollInterval);
-                            resetActionBtn();
-                        }
-                    });
-                }, 1000);
+                resumeDashboardTerminal(data.task_id);
             })
             .catch(err => {
-                statusLogs.innerHTML += `<span style="color: red;">Netzwerkfehler: ${err}</span>`;
+                statusLogs.innerHTML += `<span style="color: #ff6b6b;">Netzwerkfehler: ${err}</span>`;
                 resetActionBtn();
             });
         });
+
+        function resumeDashboardTerminal(taskId) {
+            currentTaskId = taskId;
+            actionBtn.innerHTML = '🛑 Stoppe Auswertung';
+            actionBtn.style.backgroundColor = 'var(--danger)';
+            actionBtn.type = 'button';
+
+            const terminalBox = document.getElementById('terminalBox');
+            const statusLogs = document.getElementById('statusLogs');
+            let seenFiles = new Set();
+            document.querySelectorAll('li[data-filename]').forEach(el => {
+                seenFiles.add(el.getAttribute('data-filename'));
+            });
+
+            terminalBox.style.display = 'block';
+
+            if (pollInterval) clearInterval(pollInterval);
+            pollInterval = setInterval(() => {
+                fetch('/task_status/' + currentTaskId)
+                .then(res => res.json())
+                .then(statusData => {
+                    if (statusData.logs) {
+                        statusLogs.innerHTML = statusData.logs.join('<br>');
+                        statusLogs.scrollTop = statusLogs.scrollHeight;
+                    }
+                    if (statusData.new_files && statusData.new_files.length > 0) {
+                        statusData.new_files.forEach(file => {
+                            if (!seenFiles.has(file.name)) {
+                                seenFiles.add(file.name);
+                                addLiveFileToDOM(file);
+                            }
+                        });
+                    }
+                    if (statusData.status === 'completed' || statusData.status === 'error' || statusData.status === 'stopped') {
+                        clearInterval(pollInterval);
+                        resetActionBtn();
+                    }
+                });
+            }, 1000);
+        }
+
+        // Bei Seitenaufruf prüfen, ob bereits ein Dashboard-Task läuft
+        fetch('/api/active_task')
+        .then(r => r.json())
+        .then(data => {
+            if (data.active && data.task_id) {
+                const src = (data.task && data.task.source) || 'dashboard';
+                if (src === 'dashboard') {
+                    resumeDashboardTerminal(data.task_id);
+                }
+            }
+        })
+        .catch(() => {});
 
         function stopTask() {
             if (currentTaskId) {
@@ -339,7 +808,7 @@ userSelect.control_input.addEventListener('paste', function(e) {
         function resetActionBtn() {
             actionBtn.disabled = false;
             actionBtn.innerHTML = '🚀 Auswertung starten';
-            actionBtn.style.backgroundColor = '#004488';
+            actionBtn.style.backgroundColor = 'var(--primary)';
             actionBtn.type = 'submit';
             currentTaskId = null;
         }
@@ -353,14 +822,16 @@ userSelect.control_input.addEventListener('paste', function(e) {
                         alert("Alle bisherigen Dateien wurden gelöscht.");
                         const container = document.getElementById('filesContainer');
                         
-                        const flexHeaders = container.querySelectorAll('div[style*="border-bottom: 2px solid"]');
-                        const lists = container.querySelectorAll('ul');
+                        const flexHeaders = container.querySelectorAll('.category-header-row');
+                        const lists = container.querySelectorAll('ul.file-list');
                         flexHeaders.forEach(h => h.remove());
                         lists.forEach(l => l.remove());
                         
                         if (!document.getElementById('noFilesMsg')) {
                             const p = document.createElement('p');
                             p.id = "noFilesMsg";
+                            p.style.color = "var(--text-muted)";
+                            p.style.margin = "10px 0";
                             p.textContent = "Du hast noch keine Dateien generiert.";
                             container.appendChild(p);
                         }
@@ -380,17 +851,21 @@ userSelect.control_input.addEventListener('paste', function(e) {
                     if(data.success) {
                         const h3 = document.querySelector(`h3[data-group="${categoryName}"]`);
                         if (h3) {
-                            h3.parentElement.remove();
+                            const row = h3.closest('.category-header-row');
+                            if (row) row.remove();
+                            else h3.parentElement.remove();
                         }
                         const ul = document.querySelector(`ul[data-group-list="${categoryName}"]`);
                         if (ul) {
                             ul.remove();
                         }
                         
-                        const remainingLists = document.querySelectorAll('#filesContainer ul');
+                        const remainingLists = document.querySelectorAll('#filesContainer ul.file-list');
                         if (remainingLists.length === 0 && !document.getElementById('noFilesMsg')) {
                             const p = document.createElement('p');
                             p.id = "noFilesMsg";
+                            p.style.color = "var(--text-muted)";
+                            p.style.margin = "10px 0";
                             p.textContent = "Du hast noch keine Dateien generiert.";
                             document.getElementById('filesContainer').appendChild(p);
                         }
@@ -409,30 +884,16 @@ userSelect.control_input.addEventListener('paste', function(e) {
 
             if (!groupHeader) {
                 const headerContainer = document.createElement('div');
-                headerContainer.style.display = "flex";
-                headerContainer.style.justifyContent = "space-between";
-                headerContainer.style.alignItems = "baseline";
-                headerContainer.style.borderBottom = "2px solid #ddd";
-                headerContainer.style.marginTop = "25px";
-                headerContainer.style.paddingBottom = "5px";
+                headerContainer.className = "category-header-row";
 
                 groupHeader = document.createElement('h3');
                 groupHeader.className = 'group-header';
                 groupHeader.setAttribute('data-group', file.group_name);
                 groupHeader.textContent = file.group_name;
-                groupHeader.style.border = "none";
-                groupHeader.style.padding = "0";
-                groupHeader.style.margin = "0";
-                groupHeader.style.color = "#004488";
-                groupHeader.style.fontSize = "18px";
                 
                 const delBtn = document.createElement('button');
                 delBtn.type = "button";
-                delBtn.className = "btn";
-                delBtn.style.backgroundColor = "#dc3545";
-                delBtn.style.color = "white";
-                delBtn.style.fontSize = "11px";
-                delBtn.style.padding = "4px 8px";
+                delBtn.className = "btn btn-delete-cat";
                 delBtn.innerHTML = "🗑️ Bereich löschen";
                 delBtn.onclick = function() { deleteCategory(file.group_name); };
 
@@ -441,21 +902,30 @@ userSelect.control_input.addEventListener('paste', function(e) {
                 container.appendChild(headerContainer);
 
                 groupList = document.createElement('ul');
+                groupList.className = "file-list";
                 groupList.setAttribute('data-group-list', file.group_name);
                 container.appendChild(groupList);
             }
 
             const li = document.createElement('li');
+            li.className = "file-item";
             li.setAttribute('data-filename', file.name);
-            li.style.borderLeft = "4px solid #28a745";
+            li.style.borderLeft = "4px solid var(--success)";
 
+            let icon = file.name.endsWith('.xlsx') ? '📊' : (file.name.includes('map') ? '🗺️' : '📈');
             let buttons = '';
             if (!file.name.endsWith('.xlsx')) {
-                buttons += `<a href="/files/view/${file.folder}/${encodeURIComponent(file.name)}" target="_blank" class="btn" style="background:#4363d8; font-size:12px; margin-right:5px;">Ansehen</a>`;
+                buttons += `<a href="/files/view/${file.folder}/${encodeURIComponent(file.name)}" target="_blank" class="btn" style="background:#4363d8;">Ansehen</a>`;
             }
-            buttons += `<a href="/files/download/${file.folder}/${encodeURIComponent(file.name)}" class="btn" style="font-size:12px;">Download</a>`;
+            buttons += `<a href="/files/download/${file.folder}/${encodeURIComponent(file.name)}" class="btn">Download</a>`;
 
-            li.innerHTML = `<span>${file.name} <span class="badge-new">Bereit</span></span><div>${buttons}</div>`;
+            li.innerHTML = `
+                <div class="file-name-wrapper">
+                    <span>${icon}</span>
+                    <span>${file.name} <span class="badge-new">Bereit</span></span>
+                </div>
+                <div class="file-buttons">${buttons}</div>
+            `;
             groupList.prepend(li);
         }
     </script>

@@ -686,6 +686,13 @@ def init_db() -> sqlite3.Connection:
     cursor.execute('''CREATE INDEX IF NOT EXISTS idx_error_log_username ON error_log(username)''')
     cursor.execute('''CREATE INDEX IF NOT EXISTS idx_error_log_timestamp ON error_log(timestamp)''')
 
+    cursor.execute('''CREATE TABLE IF NOT EXISTS download_telemetry (
+        metric_key TEXT PRIMARY KEY,
+        avg_sec_per_unit REAL NOT NULL,
+        sample_count INTEGER DEFAULT 0,
+        last_updated TEXT
+    )''')
+
     conn.commit()
     return conn
 
@@ -886,10 +893,163 @@ def already_downloaded_in_db(conn: sqlite3.Connection, username: str, max_verifi
 
 
 # ==========================================
+# DOWNLOAD TELEMETRIE & RESTZEITSCHÄTZUNG
+# ==========================================
+
+DEFAULT_TELEMETRY = {
+    'sec_per_stop': 0.45,
+    'sec_per_inter_batch': 0.65,
+    'sec_per_ride_calc': 0.008
+}
+
+
+def get_telemetry_metrics(conn: sqlite3.Connection) -> tuple[dict, int]:
+    """Liest historische Telemetrie-Werte und die Gesamtzahl der Samples."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT metric_key, avg_sec_per_unit, sample_count FROM download_telemetry")
+    rows = cursor.fetchall()
+    metrics = dict(DEFAULT_TELEMETRY)
+    total_samples = 0
+    for key, avg_val, count in rows:
+        if key in metrics and avg_val and avg_val > 0:
+            metrics[key] = float(avg_val)
+        if count:
+            total_samples += int(count)
+    return metrics, total_samples
+
+
+def update_download_telemetry(conn: sqlite3.Connection, metric_key: str, elapsed_active_sec: float, processed_units: int) -> None:
+    """Aktualisiert Telemetrie mit EMA (alpha = 0.3)."""
+    if processed_units < 1 or elapsed_active_sec <= 0:
+        return
+    try:
+        observed_sec_per_unit = float(elapsed_active_sec) / float(processed_units)
+        cursor = conn.cursor()
+        cursor.execute("SELECT avg_sec_per_unit, sample_count FROM download_telemetry WHERE metric_key = ?", (metric_key,))
+        row = cursor.fetchone()
+        now_iso = datetime.now().isoformat()
+        if not row or not row[1]:
+            new_avg = observed_sec_per_unit
+            new_count = 1
+        else:
+            old_avg = float(row[0])
+            old_count = int(row[1])
+            new_avg = (0.7 * old_avg) + (0.3 * observed_sec_per_unit)
+            new_count = old_count + 1
+        cursor.execute(
+            "REPLACE INTO download_telemetry (metric_key, avg_sec_per_unit, sample_count, last_updated) VALUES (?, ?, ?, ?)",
+            (metric_key, new_avg, new_count, now_iso)
+        )
+        conn.commit()
+    except Exception as e:
+        print(f"[WARNUNG] Fehler beim Aktualisieren von download_telemetry ({metric_key}): {e}")
+
+
+def get_users_sync_overview(conn: sqlite3.Connection, creator: str, is_admin: bool = False) -> list[dict]:
+    """
+    Ermittelt für den Creator und all seine Freunde den letzten sichtbaren Status
+    gemäß eigener Freigabeklasse (get_shared_visibility_query).
+    Normale User (is_admin=False) sehen nur sich selbst und ihre Freunde aus user_login_data.
+    Admins (is_admin=True) sehen zusätzlich alle Accounts mit Daten in users oder journeys.
+    """
+    global AUTH_USER, FOLLOWED_USERS, TRUSTED_USERS, FOLLOWERS_USERS
+    cursor = conn.cursor()
+
+    # 1. Lade followed_users, trusted_users und followers aus user_login_data für creator
+    cursor.execute("SELECT followed_users, trusted_users, followers FROM user_login_data WHERE owner = ?", (creator,))
+    row = cursor.fetchone()
+
+    AUTH_USER = creator
+    FOLLOWED_USERS = set()
+    TRUSTED_USERS = set()
+    FOLLOWERS_USERS = set()
+
+    all_friends = set()
+    if row:
+        if row[0]:
+            try:
+                FOLLOWED_USERS = set(json.loads(row[0]))
+                all_friends.update(FOLLOWED_USERS)
+            except Exception:
+                pass
+        if row[1]:
+            try:
+                TRUSTED_USERS = set(json.loads(row[1]))
+                all_friends.update(TRUSTED_USERS)
+            except Exception:
+                pass
+        if row[2]:
+            try:
+                FOLLOWERS_USERS = set(json.loads(row[2]))
+                all_friends.update(FOLLOWERS_USERS)
+            except Exception:
+                pass
+
+    # 2. Wenn Admin: zusätzlich alle Accounts mit Daten in der Datenbank (users und journeys)
+    if is_admin:
+        cursor.execute("""
+            SELECT username FROM users WHERE username IS NOT NULL AND username != ''
+            UNION
+            SELECT DISTINCT username FROM journeys WHERE username IS NOT NULL AND username != ''
+        """)
+        for u_row in cursor.fetchall():
+            if u_row[0]:
+                all_friends.add(u_row[0])
+
+    all_friends.discard(creator)
+    sorted_friends = sorted(list(all_friends), key=lambda s: s.lower())
+    all_users = [creator] + sorted_friends
+
+    # 3. Frage für alle diese User aus journeys das Ankunftsdatum des jeweils letzten gespeicherten Status ab
+    vis_clause = get_shared_visibility_query()
+    query = f"""
+    SELECT username,
+           MAX(COALESCE(arrivalFinal, arrivalPlanned, departureFinal, departurePlanned)) AS last_arrival,
+           COUNT(statusId) AS trip_count
+    FROM journeys
+    WHERE 1=1 {vis_clause}
+    GROUP BY username
+    """
+    cursor.execute(query)
+    user_stats = {}
+    for uname, last_arr, count in cursor.fetchall():
+        user_stats[uname] = {
+            'last_arrival': last_arr,
+            'trip_count': count or 0
+        }
+
+    # 4. & 5. Formatiere Ergebnisliste mit creator an 1. Stelle
+    result = []
+    for u in all_users:
+        stats = user_stats.get(u, {'last_arrival': None, 'trip_count': 0})
+        last_arr_raw = stats['last_arrival']
+        german_date = None
+        if last_arr_raw:
+            try:
+                date_str = str(last_arr_raw).split('T')[0]
+                parts = date_str.split('-')
+                if len(parts) == 3:
+                    german_date = f"{parts[2]}.{parts[1]}.{parts[0]}"
+            except Exception:
+                german_date = None
+
+        result.append({
+            'username': u,
+            'is_self': (u == creator),
+            'last_arrival_date': german_date,
+            'last_arrival_iso': last_arr_raw,
+            'trip_count': stats['trip_count']
+        })
+
+    return result
+
+
+# ==========================================
 # DATENBESCHAFFUNG MIT HOCHZÄHLERN & COUNTDOWNS
 # ==========================================
 
-def fetch_statuses_from_user(api_token, username, already_downloaded: pd.DataFrame | None = None, log_callback=None) -> list:
+def fetch_statuses_from_user(api_token, username, already_downloaded: pd.DataFrame | None = None,
+                             log_callback=None, progress_callback=None) -> list:
     if already_downloaded is None or 'statusId' not in already_downloaded.columns:
         already_ids = set()
     else:
@@ -922,9 +1082,29 @@ def fetch_statuses_from_user(api_token, username, already_downloaded: pd.DataFra
                 url = None
 
             remaining = travel_response.headers.get('x-ratelimit-remaining')
+            rem_val = 60
+            try:
+                rem_val = int(remaining)
+            except Exception:
+                rem_val = 60
+
             counter_msg = f'   📥 Statusse werden geladen: Seite {number} (Bisher {len(current_user_data)} geladen, Limit: {remaining})'
             print(counter_msg)
             safe_log(log_callback, counter_msg, replace=(number > 1))
+
+            if progress_callback:
+                progress_callback({
+                    'step_index': 1,
+                    'step_name': 'Statusse sammeln',
+                    'step_current': number,
+                    'step_total': 0,
+                    'step_detail': f"Seite {number} ({len(current_user_data)} Statusse geladen)",
+                    'rate_limit_remaining': rem_val,
+                    'rate_limit_max': max(500, rem_val),
+                    'rate_limit_waiting': False,
+                    'rate_limit_sleep_remaining': 0
+                })
+
             number += 1
             
         except Exception as e:
@@ -932,7 +1112,20 @@ def fetch_statuses_from_user(api_token, username, already_downloaded: pd.DataFra
                 warn = '[API] Rate Limit (429) erreicht. Warte 30 Sekunden...'
                 print(warn)
                 safe_log(log_callback, warn)
-                sleep(30)
+                for sec_left in range(30, 0, -1):
+                    if progress_callback:
+                        progress_callback({
+                            'step_index': 1,
+                            'step_name': 'Statusse sammeln',
+                            'step_current': number,
+                            'step_total': 0,
+                            'step_detail': f"Rate-Limit (HTTP 429) – Pausiere {sec_left} Sekunden...",
+                            'rate_limit_remaining': 0,
+                            'rate_limit_max': max(500, rem_val),
+                            'rate_limit_waiting': True,
+                            'rate_limit_sleep_remaining': sec_left
+                        })
+                    sleep(1)
             else:
                 err = f'[FEHLER] Konnte Daten von {username} nicht abrufen: {e}'
                 print(err)
@@ -1010,7 +1203,7 @@ def fetch_information_from_user(conn: sqlite3.Connection, api_token, username: s
 
 
 def get_or_fetch_stop_info(conn: sqlite3.Connection, api_token, stop_id: int, stop_name: str = None,
-                           on_download=None) -> tuple:
+                           on_download=None, rate_limit_callback=None) -> tuple:
     if stop_id is None or str(stop_id).strip().lower() in ('', 'none'):
         return 'Europe/Berlin', stop_name or 'Unbekannt', None, None
 
@@ -1079,7 +1272,10 @@ def get_or_fetch_stop_info(conn: sqlite3.Connection, api_token, stop_id: int, st
                 status = e.response.status_code
                 if status == 429:
                     print('[API] Rate Limit erreicht (429). Warte 30 Sekunden...')
-                    sleep(30)
+                    if rate_limit_callback:
+                        rate_limit_callback(30)
+                    else:
+                        sleep(30)
                 elif status in (500, 502, 503, 504):
                     server_error_count += 1
                     print(f'[API] Server überlastet ({status}) bei Haltestelle {stop_id}. Versuch {server_error_count}/3')
@@ -1089,7 +1285,10 @@ def get_or_fetch_stop_info(conn: sqlite3.Connection, api_token, stop_id: int, st
                         log_error_to_db(error=e, error_type=f"HTTP_{status}", error_message=msg, context=f"get_or_fetch_stop_info (ID: {stop_id})", conn=conn)
                         return 'Europe/Berlin', stop_name, None, None
                     print('Warte 30 Sekunden...')
-                    sleep(30)
+                    if rate_limit_callback:
+                        rate_limit_callback(30)
+                    else:
+                        sleep(30)
                 elif status == 404:
                     error_404_count += 1
                     print(f"\n[API FEHLER] Haltestelle '{stop_name}' (ID: {stop_id}) nicht gefunden (404). Versuch {error_404_count}/3")
@@ -1105,7 +1304,10 @@ def get_or_fetch_stop_info(conn: sqlite3.Connection, api_token, stop_id: int, st
                     raise e
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
                 print(f"\n[VERBINDUNGSFEHLER] Timeout/Abbruch bei Haltestelle '{stop_name}' (ID: {stop_id}). Warte 30 Sekunden...")
-                sleep(30)
+                if rate_limit_callback:
+                    rate_limit_callback(30)
+                else:
+                    sleep(30)
             except KeyboardInterrupt:
                 conn.commit()
                 conn.close()
@@ -1120,7 +1322,8 @@ def get_or_fetch_stop_info(conn: sqlite3.Connection, api_token, stop_id: int, st
         return row
 
 
-def get_inter_stops_for_journeys(api_token, statuses_dicts: list, log_callback=None) -> dict:
+def get_inter_stops_for_journeys(api_token, statuses_dicts: list, log_callback=None,
+                                 progress_callback=None, rate_limit_callback=None) -> dict:
     global remaining
     statuses = [data['checkin']['trip'] for data in statuses_dicts]
     intermediate_data = {}
@@ -1153,9 +1356,17 @@ def get_inter_stops_for_journeys(api_token, statuses_dicts: list, log_callback=N
                 cd_msg = f"   🚉 Zwischenhalte-Countdown: Noch {noch_zu_laden} von {total} Fahrten verbleibend... (Limit: {remaining})"
                 print(cd_msg)
                 safe_log(log_callback, cd_msg, replace=(current_index > 50))
+
+                if progress_callback:
+                    batches_done = math.ceil(min(current_index, total) / 50.0)
+                    total_batches = math.ceil(total / 50.0)
+                    progress_callback(batches_done, total_batches, min(current_index, total), total)
             except Exception as e:
                 if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 429:
-                    sleep(30)
+                    if rate_limit_callback:
+                        rate_limit_callback(30)
+                    else:
+                        sleep(30)
                 else:
                     log_error_to_db(username=None, error=e, context=f"get_inter_stops_for_journeys ({url})")
                     repeat_bool = False
@@ -1184,7 +1395,8 @@ def calculate_haversine(lat1, lon1, lat2, lon2) -> int:
     return int(R * c)
 
 
-def calculate_and_insert(api_token, conn, user_data: list, all_inter_stations: dict, log_callback=None) -> None:
+def calculate_and_insert(api_token, conn, user_data: list, all_inter_stations: dict,
+                         log_callback=None, progress_callback=None) -> None:
     global remaining
     cursor = conn.cursor()
 
@@ -1224,7 +1436,7 @@ def calculate_and_insert(api_token, conn, user_data: list, all_inter_stations: d
             if lat_lon_row:
                 prev_dest_lat, prev_dest_lon = lat_lon_row
 
-    # COUNTDOWN: Noch herunterzuladende Haltestellen ermitteln
+    # Sicherheits-Check: Falls ausnahmsweise noch unbekannte Haltestellen fehlen
     all_stop_ids = set()
     missing_stops_dict = {}
     for d in user_data:
@@ -1245,31 +1457,18 @@ def calculate_and_insert(api_token, conn, user_data: list, all_inter_stations: d
         existing_ids = {r[0] for r in cursor.fetchall()}
         missing_stop_ids = list(all_stop_ids - existing_ids)
 
-    total_missing_stops = len(missing_stop_ids)
-    stops_downloaded = [0]
-
-    def on_stop_download(s_name):
-        stops_downloaded[0] += 1
-        rem = max(0, total_missing_stops - stops_downloaded[0])
-        s_msg = f"   🚏 Lade Haltestelle: {s_name} | Noch {rem} von {total_missing_stops} übrig (Limit: {remaining})"
-        print(s_msg)
-        safe_log(log_callback, s_msg, replace=(stops_downloaded[0] > 1))
-
-    if total_missing_stops > 0:
-        init_s_msg = f"   🚏 Haltestellen-Countdown: Noch {total_missing_stops} neue Haltestellen zu laden... (Limit: {remaining})"
-        print(init_s_msg)
-        safe_log(log_callback, init_s_msg)
-
-        # Vorab-Download aller fehlenden Haltestellen vor den Berechnungen
-        for s_id in missing_stop_ids:
-            get_or_fetch_stop_info(conn, api_token, s_id, missing_stops_dict.get(s_id), on_download=on_stop_download)
+    for s_id in missing_stop_ids:
+        get_or_fetch_stop_info(conn, api_token, s_id, missing_stops_dict.get(s_id))
 
     total_rides = len(user_data)
     current_ride = 0
 
     for data in reversed(user_data):
         current_ride += 1
-        if current_ride % 10 == 0 or current_ride == total_rides:
+        if progress_callback:
+            progress_callback(current_ride, total_rides)
+
+        if current_ride % 100 == 0 or current_ride == total_rides:
             rem_rides = total_rides - current_ride
             ride_msg = f"   ⚙️ Fahrten-Verarbeitung: Noch {rem_rides} von {total_rides} Fahrten zu berechnen..."
             print(ride_msg)
@@ -1501,7 +1700,8 @@ def calculate_and_insert(api_token, conn, user_data: list, all_inter_stations: d
 
 
 def fetch_data_to_db(username: str, reload_all: bool = False, conn: sqlite3.Connection | None = None,
-                     api_token: str | None = None, log_callback=None, update_db: bool = True) -> sqlite3.Connection:
+                     api_token: str | None = None, log_callback=None, update_db: bool = True,
+                     progress_callback=None) -> sqlite3.Connection:
     if conn is None:
         conn = init_db()
     if api_token is None:
@@ -1533,29 +1733,261 @@ def fetch_data_to_db(username: str, reload_all: bool = False, conn: sqlite3.Conn
     # Profil des Users immer updaten/prüfen
     username = fetch_information_from_user(conn, api_token, username, max(highest_privilege, current_privilege))
 
+    # Helper für Fortschrittsmeldung
+    def report_progress(step_index, step_name, step_current, step_total, step_detail,
+                        rate_limit_waiting=False, rate_limit_sleep_remaining=0,
+                        eta_seconds=None, eta_based_on_history=False, eta_sample_count=0):
+        if progress_callback:
+            rem_val = 60
+            try:
+                rem_val = int(remaining)
+            except Exception:
+                rem_val = 60
+            progress_callback({
+                'step_index': step_index,
+                'step_name': step_name,
+                'step_current': step_current,
+                'step_total': step_total,
+                'step_detail': step_detail,
+                'rate_limit_remaining': rem_val,
+                'rate_limit_max': max(500, rem_val),
+                'rate_limit_waiting': rate_limit_waiting,
+                'rate_limit_sleep_remaining': rate_limit_sleep_remaining,
+                'eta_seconds': eta_seconds,
+                'eta_based_on_history': eta_based_on_history,
+                'eta_sample_count': eta_sample_count
+            })
+
     # Abbrechen, falls keine neuen Statusse geladen werden sollen
     if not update_db:
         msg = f"[INFO] Update der Statusse übersprungen: Nutze bestehende Daten für {username}."
         print(msg)
         safe_log(log_callback, msg)
+        report_progress(1, 'Statusse sammeln', 0, 0, "Update übersprungen")
+        report_progress(2, 'Haltestellen herunterladen', 0, 0, "Update übersprungen")
+        report_progress(3, 'Zwischenhaltestellen laden', 0, 0, "Update übersprungen")
+        report_progress(4, 'Fahrten berechnen', 0, 0, "Update übersprungen")
         return conn
 
     downloaded_frame = pd.DataFrame() if (reload_all or max_verified_id == 0) else already_downloaded_in_db(conn, username, max_verified_status_id=max_verified_id)
-    user_statuses = fetch_statuses_from_user(api_token, username, downloaded_frame, log_callback=log_callback)
 
-    if user_statuses:
+    # ==========================================
+    # SCHRITT 1: Statusse sammeln
+    # ==========================================
+    report_progress(1, 'Statusse sammeln', 0, 0, f"Hole Statusse für {username}...")
+    user_statuses = fetch_statuses_from_user(api_token, username, downloaded_frame,
+                                             log_callback=log_callback,
+                                             progress_callback=progress_callback)
+    report_progress(1, 'Statusse sammeln', 1, 1, f"{len(user_statuses)} Statusse gefunden")
+
+    if not user_statuses:
+        msg = f"[INFO] Keine neuen Fahrten für {username} gefunden. System ist up-to-date."
+        print(msg)
+        safe_log(log_callback, msg)
+        report_progress(2, 'Haltestellen herunterladen', 0, 0, "Keine neuen Haltestellen nötig (up-to-date)")
+        report_progress(3, 'Zwischenhaltestellen laden', 0, 0, "Keine neuen Zwischenhalte nötig (up-to-date)")
+        report_progress(4, 'Fahrten berechnen', 0, 0, "Alle Fahrten aktuell (up-to-date)")
+    else:
+        # Historische Telemetrie für ETA laden
+        telemetry_metrics, telemetry_samples = get_telemetry_metrics(conn)
+        hist_sec_per_stop = telemetry_metrics.get('sec_per_stop', 0.45)
+        hist_sec_per_inter_batch = telemetry_metrics.get('sec_per_inter_batch', 0.65)
+        hist_sec_per_ride_calc = telemetry_metrics.get('sec_per_ride_calc', 0.008)
+
+        # Mengengerüste für Schritte 2, 3 und 4 ermitteln
+        all_stop_ids = set()
+        missing_stops_dict = {}
+        for d in user_statuses:
+            t = d.get('checkin', {})
+            if t.get('origin', {}).get('id'):
+                s_id = t['origin']['id']
+                all_stop_ids.add(s_id)
+                missing_stops_dict[s_id] = t['origin'].get('name')
+            if t.get('destination', {}).get('id'):
+                s_id = t['destination']['id']
+                all_stop_ids.add(s_id)
+                missing_stops_dict[s_id] = t['destination'].get('name')
+
+        missing_stop_ids = []
+        if all_stop_ids:
+            placeholders = ','.join(['?'] * len(all_stop_ids))
+            cursor.execute(f"SELECT id FROM stops WHERE id IN ({placeholders})", list(all_stop_ids))
+            existing_ids = {r[0] for r in cursor.fetchall()}
+            missing_stop_ids = list(all_stop_ids - existing_ids)
+
+        total_missing_stops = len(missing_stop_ids)
+
         cursor.execute("SELECT DISTINCT tripId FROM journeys WHERE username = ? AND interStops IS NOT NULL", (username,))
         known_trip_ids = {r[0] for r in cursor.fetchall()}
         statuses_needing_inter = [
             s for s in user_statuses
             if (s.get('checkin') or {}).get('trip') not in known_trip_ids
         ]
-        inter_stations = get_inter_stops_for_journeys(api_token, statuses_needing_inter, log_callback=log_callback)
-        calculate_and_insert(api_token, conn, user_statuses, inter_stations, log_callback=log_callback)
-    else:
-        msg = f"[INFO] Keine neuen Fahrten für {username} gefunden. System ist up-to-date."
-        print(msg)
-        safe_log(log_callback, msg)
+        total_inter_trips = len(statuses_needing_inter)
+        total_inter_batches = math.ceil(total_inter_trips / 50.0)
+        total_rides = len(user_statuses)
+
+        # ETA-Berechnungsfunktion (gemäß Abschnitt 5.2)
+        def compute_eta(step_idx, current_done, step_active_time, waiting_sleep_sec=0):
+            rem_int = 60
+            try:
+                rem_int = int(remaining)
+            except Exception:
+                rem_int = 60
+
+            if step_idx == 2:
+                rem_stops = max(0, total_missing_stops - current_done)
+                if current_done >= 3 and step_active_time > 0:
+                    live_rate = step_active_time / float(current_done)
+                    eff_stop_rate = 0.5 * hist_sec_per_stop + 0.5 * live_rate
+                else:
+                    eff_stop_rate = hist_sec_per_stop
+                work_eta = (rem_stops * eff_stop_rate) + (total_inter_batches * hist_sec_per_inter_batch) + (total_rides * hist_sec_per_ride_calc)
+                rem_api_calls = rem_stops + total_inter_batches
+
+            elif step_idx == 3:
+                rem_batches = max(0, total_inter_batches - current_done)
+                if current_done >= 3 and step_active_time > 0:
+                    live_rate = step_active_time / float(current_done)
+                    eff_batch_rate = 0.5 * hist_sec_per_inter_batch + 0.5 * live_rate
+                else:
+                    eff_batch_rate = hist_sec_per_inter_batch
+                work_eta = (rem_batches * eff_batch_rate) + (total_rides * hist_sec_per_ride_calc)
+                rem_api_calls = rem_batches
+
+            elif step_idx == 4:
+                rem_rides = max(0, total_rides - current_done)
+                if current_done >= 3 and step_active_time > 0:
+                    live_rate = step_active_time / float(current_done)
+                    eff_ride_rate = 0.5 * hist_sec_per_ride_calc + 0.5 * live_rate
+                else:
+                    eff_ride_rate = hist_sec_per_ride_calc
+                work_eta = rem_rides * eff_ride_rate
+                rem_api_calls = 0
+            else:
+                return None
+
+            if rem_api_calls > rem_int:
+                expected_waits = math.ceil((rem_api_calls - rem_int) / 60.0)
+                work_eta += expected_waits * 30.0
+
+            if waiting_sleep_sec > 0:
+                work_eta += waiting_sleep_sec
+
+            return max(0, int(round(work_eta)))
+
+        # ==========================================
+        # SCHRITT 2: Haltestellen herunterladen
+        # ==========================================
+        if total_missing_stops == 0:
+            report_progress(2, 'Haltestellen herunterladen', 0, 0, "Keine neuen Haltestellen nötig (alle gecacht)",
+                            eta_seconds=compute_eta(2, 0, 0),
+                            eta_based_on_history=(telemetry_samples > 0),
+                            eta_sample_count=telemetry_samples)
+        else:
+            init_s_msg = f"   🚏 Haltestellen-Countdown: Noch {total_missing_stops} neue Haltestellen zu laden... (Limit: {remaining})"
+            print(init_s_msg)
+            safe_log(log_callback, init_s_msg)
+
+            t0_step2 = time()
+            sleep_deduction_step2 = 0.0
+            stops_downloaded = 0
+
+            def on_stop_rate_limit(secs=30):
+                nonlocal sleep_deduction_step2
+                t_sl_start = time()
+                for sl_left in range(secs, 0, -1):
+                    act_sec = (time() - t0_step2) - sleep_deduction_step2
+                    eta_val = compute_eta(2, stops_downloaded, act_sec, waiting_sleep_sec=sl_left)
+                    report_progress(2, 'Haltestellen herunterladen', stops_downloaded, total_missing_stops,
+                                    f"Rate-Limit (HTTP 429) – Pausiere {sl_left} Sekunden...",
+                                    rate_limit_waiting=True, rate_limit_sleep_remaining=sl_left,
+                                    eta_seconds=eta_val, eta_based_on_history=(telemetry_samples > 0),
+                                    eta_sample_count=telemetry_samples)
+                    sleep(1)
+                sleep_deduction_step2 += (time() - t_sl_start)
+
+            for idx, s_id in enumerate(missing_stop_ids):
+                s_name_guess = missing_stops_dict.get(s_id)
+                tz, fetched_name, lat, lon = get_or_fetch_stop_info(conn, api_token, s_id, s_name_guess,
+                                                                    rate_limit_callback=on_stop_rate_limit)
+                stops_downloaded += 1
+                rem = max(0, total_missing_stops - stops_downloaded)
+                s_msg = f"   🚏 Lade Haltestelle: {fetched_name} | Noch {rem} von {total_missing_stops} übrig (Limit: {remaining})"
+                print(s_msg)
+                safe_log(log_callback, s_msg, replace=(stops_downloaded > 1))
+
+                act_sec = (time() - t0_step2) - sleep_deduction_step2
+                eta_val = compute_eta(2, stops_downloaded, act_sec)
+                report_progress(2, 'Haltestellen herunterladen', stops_downloaded, total_missing_stops,
+                                f"Lade Haltestelle: {fetched_name} ({stops_downloaded}/{total_missing_stops})",
+                                eta_seconds=eta_val, eta_based_on_history=(telemetry_samples > 0),
+                                eta_sample_count=telemetry_samples)
+
+            active_sec_step2 = (time() - t0_step2) - sleep_deduction_step2
+            update_download_telemetry(conn, 'sec_per_stop', active_sec_step2, total_missing_stops)
+
+        # ==========================================
+        # SCHRITT 3: Zwischenhaltestellen laden
+        # ==========================================
+        if total_inter_trips == 0:
+            report_progress(3, 'Zwischenhaltestellen laden', 0, 0, "Keine neuen Zwischenhalte nötig",
+                            eta_seconds=compute_eta(3, 0, 0),
+                            eta_based_on_history=(telemetry_samples > 0),
+                            eta_sample_count=telemetry_samples)
+            inter_stations = {}
+        else:
+            t0_step3 = time()
+            sleep_deduction_step3 = 0.0
+
+            def on_inter_rate_limit(secs=30):
+                nonlocal sleep_deduction_step3
+                t_sl_start = time()
+                for sl_left in range(secs, 0, -1):
+                    act_sec = (time() - t0_step3) - sleep_deduction_step3
+                    eta_val = compute_eta(3, 0, act_sec, waiting_sleep_sec=sl_left)
+                    report_progress(3, 'Zwischenhaltestellen laden', 0, total_inter_trips,
+                                    f"Rate-Limit (HTTP 429) – Pausiere {sl_left} Sekunden...",
+                                    rate_limit_waiting=True, rate_limit_sleep_remaining=sl_left,
+                                    eta_seconds=eta_val, eta_based_on_history=(telemetry_samples > 0),
+                                    eta_sample_count=telemetry_samples)
+                    sleep(1)
+                sleep_deduction_step3 += (time() - t_sl_start)
+
+            def on_inter_progress(batches_done, total_b, journeys_done, journeys_tot):
+                act_sec = (time() - t0_step3) - sleep_deduction_step3
+                eta_val = compute_eta(3, batches_done, act_sec)
+                report_progress(3, 'Zwischenhaltestellen laden', journeys_done, journeys_tot,
+                                f"Zwischenhalte: {journeys_done}/{journeys_tot} Fahrten",
+                                eta_seconds=eta_val, eta_based_on_history=(telemetry_samples > 0),
+                                eta_sample_count=telemetry_samples)
+
+            inter_stations = get_inter_stops_for_journeys(api_token, statuses_needing_inter,
+                                                          log_callback=log_callback,
+                                                          progress_callback=on_inter_progress,
+                                                          rate_limit_callback=on_inter_rate_limit)
+            active_sec_step3 = (time() - t0_step3) - sleep_deduction_step3
+            update_download_telemetry(conn, 'sec_per_inter_batch', active_sec_step3, total_inter_batches)
+
+        # ==========================================
+        # SCHRITT 4: Fahrten berechnen
+        # ==========================================
+        t0_step4 = time()
+
+        def on_ride_calc_progress(current_ride, total_r):
+            act_sec = time() - t0_step4
+            eta_val = compute_eta(4, current_ride, act_sec)
+            report_progress(4, 'Fahrten berechnen', current_ride, total_r,
+                            f"Berechne Fahrt {current_ride}/{total_r}",
+                            eta_seconds=eta_val, eta_based_on_history=(telemetry_samples > 0),
+                            eta_sample_count=telemetry_samples)
+
+        calculate_and_insert(api_token, conn, user_statuses, inter_stations,
+                             log_callback=log_callback,
+                             progress_callback=on_ride_calc_progress)
+
+        active_sec_step4 = time() - t0_step4
+        update_download_telemetry(conn, 'sec_per_ride_calc', active_sec_step4, total_rides)
 
     cursor.execute("SELECT MAX(statusId) FROM journeys WHERE username = ?", (username,))
     new_max_row = cursor.fetchone()
@@ -2076,6 +2508,20 @@ def resolve_filtered_status_ids(conn: sqlite3.Connection, usernames: list[str], 
         elif col == 'any_stop_via':
             conds.append("(origin.stopName = ? OR destination.stopName = ? OR j_flt.interStops LIKE ?)")
             params.extend([str(val), str(val), f'%"{val}"%'])
+        elif col == 'stop_via':
+            conds.append("j_flt.interStops LIKE ?")
+            params.append(f'%"{val}"%')
+        elif col in ('delay', 'arrivalDelay', 'departureDelay'):
+            target_field = 'j_flt.departureDelay' if col == 'departureDelay' else 'j_flt.arrivalDelay'
+            op = flt.get('op', '=')
+            if op not in ('>', '>=', '=', '<=', '<'):
+                op = '='
+            try:
+                num_val = int(round(float(val)))
+                conds.append(f"(j_flt.realtimeAvailability = 1 AND {target_field} {op} ?)")
+                params.append(num_val)
+            except (ValueError, TypeError):
+                pass
         elif col.startswith('geo_'):
             g_col = col.replace('geo_', '')
             if g_col in AVAILABLE_GEO_COLUMNS:
@@ -5617,19 +6063,13 @@ def check_and_update_rate_limit(conn: sqlite3.Connection, username: str, is_admi
 
 
 def get_rate_limit_status(conn: sqlite3.Connection, username: str, is_admin: bool = False, limit_per_hour: int = 10) -> dict:
-    if is_admin:
-        return {'is_admin': True, 'has_byok': False, 'rate_limited': False, 'remaining': 999999, 'limit': limit_per_hour}
-
     cursor = conn.cursor()
     cursor.execute("SELECT gemini_api_key, ai_request_count, ai_window_start FROM user_login_data WHERE owner = ?", (username,))
     row = cursor.fetchone()
-    if not row:
-        return {'is_admin': False, 'has_byok': False, 'rate_limited': False, 'remaining': limit_per_hour, 'limit': limit_per_hour}
-
-    byok_key, count, window_start_str = row[0], row[1] or 0, row[2]
+    byok_key = row[0] if row else None
+    count = (row[1] or 0) if row else 0
+    window_start_str = row[2] if row else None
     has_byok = bool(byok_key and str(byok_key).strip())
-    if has_byok:
-        return {'is_admin': False, 'has_byok': True, 'rate_limited': False, 'remaining': 999999, 'limit': limit_per_hour}
 
     now = datetime.now()
     window_start = None
@@ -5639,18 +6079,80 @@ def get_rate_limit_status(conn: sqlite3.Connection, username: str, is_admin: boo
         except Exception:
             window_start = None
 
-    if not window_start or (now - window_start).total_seconds() >= 3600:
+    if is_admin or has_byok:
+        remaining = 999999
+        rate_limited = False
+    elif not window_start or (now - window_start).total_seconds() >= 3600:
         remaining = limit_per_hour
+        rate_limited = False
     else:
         remaining = max(0, limit_per_hour - count)
+        rate_limited = (remaining <= 0)
 
-    return {
-        'is_admin': False,
-        'has_byok': False,
-        'rate_limited': remaining <= 0,
+    result = {
+        'is_admin': is_admin,
+        'has_byok': has_byok,
+        'rate_limited': rate_limited,
         'remaining': remaining,
         'limit': limit_per_hour
     }
+
+    if is_admin:
+        global_key = (os.getenv('GEMINI_API_KEY') or '').strip()
+        has_global_key = bool(global_key)
+        masked_global_key = (global_key[:6] + "..." + global_key[-4:]) if len(global_key) > 10 else ("Aktiv" if has_global_key else "Nicht hinterlegt")
+
+        since_24h = (now - timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S')
+        since_1h = (now - timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
+
+        cursor.execute("""
+            SELECT COUNT(*) 
+            FROM ai_messages m
+            JOIN ai_chats c ON m.chat_id = c.id
+            LEFT JOIN user_login_data u ON c.owner = u.owner
+            WHERE m.role = 'user' 
+              AND m.created_at >= ?
+              AND (u.gemini_api_key IS NULL OR TRIM(u.gemini_api_key) = '')
+        """, (since_24h,))
+        global_reqs_24h = cursor.fetchone()[0] or 0
+
+        cursor.execute("""
+            SELECT COUNT(*) 
+            FROM ai_messages m
+            JOIN ai_chats c ON m.chat_id = c.id
+            LEFT JOIN user_login_data u ON c.owner = u.owner
+            WHERE m.role = 'user' 
+              AND m.created_at >= ?
+              AND (u.gemini_api_key IS NULL OR TRIM(u.gemini_api_key) = '')
+        """, (since_1h,))
+        global_reqs_1h = cursor.fetchone()[0] or 0
+
+        cursor.execute("""
+            SELECT 
+                COUNT(CASE WHEN gemini_api_key IS NOT NULL AND TRIM(gemini_api_key) != '' THEN 1 END),
+                COUNT(CASE WHEN gemini_api_key IS NULL OR TRIM(gemini_api_key) = '' THEN 1 END)
+            FROM user_login_data
+        """)
+        u_counts = cursor.fetchone()
+        byok_users = u_counts[0] if u_counts else 0
+        global_users = u_counts[1] if u_counts else 0
+
+        model_name = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
+
+        result['admin_info'] = {
+            'has_global_key': has_global_key,
+            'masked_global_key': masked_global_key,
+            'model_name': model_name,
+            'google_rpm': 15,
+            'google_rpd': 1500,
+            'google_tpm': '1.000.000',
+            'global_reqs_24h': global_reqs_24h,
+            'global_reqs_1h': global_reqs_1h,
+            'global_users_count': global_users,
+            'byok_users_count': byok_users
+        }
+
+    return result
 
 
 def sanitize_cell_value(val):

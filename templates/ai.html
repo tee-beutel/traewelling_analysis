@@ -820,6 +820,7 @@
                 <div style="display: flex; gap: 4px; align-items: center;">
                     <button type="button" class="btn btn-sm btn-outline" style="padding: 2px 7px; font-size: 11px; height: 22px; line-height: 1;" onclick="resetToSelfUser()" title="Nur deinen eigenen Account auswählen">👤 Nur ich</button>
                     <button type="button" class="btn btn-sm btn-outline" style="padding: 2px 7px; font-size: 11px; height: 22px; line-height: 1;" onclick="clearAllUsers()" title="Alle User abwählen">✕ Leeren</button>
+                    <button type="button" class="btn btn-sm btn-outline" id="aiSyncBtn" style="padding: 2px 9px; font-size: 11px; height: 22px; line-height: 1; color: #004488; font-weight: 600;" onclick="triggerAiDbSync()" title="Neuste Fahrten der ausgewählten User von Träwelling synchronisieren">🔄 Neuste Fahrten laden</button>
                 </div>
             </div>
             <select id="user-select" name="users" multiple placeholder="User auswählen oder eintippen...">
@@ -843,6 +844,9 @@
             💡 <strong>Hinweis:</strong> Änderungen an Usern und Zeitraum gelten sofort für deine nächste Frage oder Rückfrage im aktiven Chat.
         </div>
     </div>
+
+    <!-- Live Sync Widget -->
+    {% include 'sync_widget.html' %}
 
     <!-- 3. ZWEI-SPALTEN-LAYOUT: SIDEBAR + CHAT -->
     <div class="ai-grid">
@@ -999,6 +1003,47 @@
         }
     }
 
+    function triggerAiDbSync() {
+        const btn = document.getElementById('aiSyncBtn');
+        if (btn) btn.disabled = true;
+
+        let users = [];
+        if (tomUserSelect) {
+            const v = tomUserSelect.getValue();
+            users = Array.isArray(v) ? v : (v ? [v] : []);
+        } else {
+            const sel = document.getElementById('user-select');
+            users = Array.from(sel.selectedOptions).map(o => o.value);
+        }
+        if (users.length === 0) {
+            users = [loggedInUser];
+        }
+
+        const fd = new FormData();
+        users.forEach(u => fd.append('users', u));
+        fd.append('update_db', 'on');
+        fd.append('source', 'ai');
+
+        fetch('/start_generation', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.task_id) {
+                alert('Fehler beim Starten des Syncs: ' + (d.error || 'Unbekannt'));
+                if (btn) btn.disabled = false;
+                return;
+            }
+            if (window.startGlobalSyncWidget) {
+                window.startGlobalSyncWidget(d.task_id, function() {
+                    if (btn) btn.disabled = false;
+                });
+            }
+        })
+        .catch(err => {
+            alert('Netzwerkfehler: ' + err);
+            if (btn) btn.disabled = false;
+        });
+    }
+
     function clearAllUsers() {
         if (tomUserSelect) {
             tomUserSelect.clear();
@@ -1069,6 +1114,22 @@
         }
     }
 
+    // Backup-Helper: Holt nur den reinen Antworttext aus der DB (ohne SQL-Frage & SQL-Ergebnis)
+    async function fetchBackupAnswer(chatId) {
+        try {
+            const url = `/api/ai/chat/backup_latest?chat_id=${encodeURIComponent(chatId || '')}`;
+            const resp = await fetch(url);
+            if (!resp.ok) return null;
+            const backupData = await resp.json();
+            if (backupData && backupData.success && backupData.answer) {
+                return backupData;
+            }
+        } catch (err) {
+            console.error('Backup-Request fehlgeschlagen:', err);
+        }
+        return null;
+    }
+
     async function selectChat(chatId) {
         if (isWaitingForResponse) return;
         toggleChatSidebar(false);
@@ -1085,7 +1146,16 @@
         try {
             const resp = await fetch(`/api/ai/chats/${chatId}`);
             if (!resp.ok) throw new Error('Chat konnte nicht geladen werden.');
-            const data = await resp.json();
+            const rawText = await resp.text();
+            let data;
+            try {
+                data = JSON.parse(rawText);
+            } catch (parseErr) {
+                console.warn('JSON-Fehler beim Laden des Chats, nutze Text-Only Backup-Endpunkt...', parseErr);
+                const backupResp = await fetch(`/api/ai/chats/${chatId}/backup_messages`);
+                if (!backupResp.ok) throw new Error('Backup-Chat konnte nicht geladen werden.');
+                data = await backupResp.json();
+            }
 
             // Filter-Werte des Chats wiederherstellen
             const meta = data.chat || {};
@@ -1242,6 +1312,129 @@
         return html;
     }
 
+    // Erzeugt das HTML für die aufklappbaren SQL- und Ergebnis-Boxen
+    function buildSqlDetailsHtml(sqlQuery, rowCount, sqlResult) {
+        let parsedResult = sqlResult;
+        if (typeof parsedResult === 'string') {
+            try { parsedResult = JSON.parse(parsedResult); } catch (e) { parsedResult = null; }
+        }
+
+        if (parsedResult && parsedResult.type === 'multi' && Array.isArray(parsedResult.steps) && parsedResult.steps.length > 0) {
+            const totalSteps = parsedResult.steps.length;
+            const totalRows = (rowCount !== undefined && rowCount !== null) ? rowCount : parsedResult.steps.reduce((acc, s) => acc + (s.total_rows || 0), 0);
+
+            let stepsHtml = '';
+            parsedResult.steps.forEach((step, idx) => {
+                const stepNum = idx + 1;
+                const stepLabel = escapeHtml(step.label || `Schritt ${stepNum}`);
+                const isStepDf = step.query_type === 'dataframe' || (step.query && step.query.trim().startsWith('#'));
+                const stepBadge = (step.total_rows !== undefined && step.total_rows !== null) ? `${step.total_rows} ${isStepDf ? 'Einträge' : 'Treffer'}` : '';
+                const copyBtnText = isStepDf ? '📋 Tool kopieren' : '📋 SQL kopieren';
+
+                stepsHtml += `
+                    <div class="multi-step-card" style="margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px;">
+                        <div style="font-weight: 600; font-size: 13px; margin-bottom: 6px; color: #64b5f6;">
+                            [${stepNum}/${totalSteps}] ${stepLabel} ${stepBadge ? `<span style="font-size: 11px; opacity: 0.8; font-weight: normal; color: #aaa;">(${stepBadge})</span>` : ''}
+                        </div>
+                        <div class="sql-code-container" style="margin-bottom: 8px;">
+                            <button type="button" class="btn-copy-sql" onclick="copySqlFromContainer(this)" title="In Zwischenablage kopieren">${copyBtnText}</button>
+                            <pre style="margin: 0;"><code>${escapeHtml(step.query || '')}</code></pre>
+                        </div>
+                        ${(step.columns && step.columns.length > 0) ? `
+                        <details class="sql-details sql-result-details" style="margin: 4px 0 0 0;">
+                            <summary style="font-size: 12px; cursor: pointer;">📊 Ergebnistabelle (${step.total_rows || step.row_count || 0} Zeilen anzeigen)</summary>
+                            ${renderSqlResultTable(step)}
+                        </details>
+                        ` : ''}
+                    </div>
+                `;
+            });
+
+            return `
+                <details class="sql-details" style="margin-top: 12px;">
+                    <summary style="font-weight: 500;">🛠️ ${totalSteps} ausgeführte Abfragen & Analyse-Tools anzeigen (${totalRows} Treffer gesamt)</summary>
+                    <div style="padding: 4px 8px;">
+                        ${stepsHtml}
+                    </div>
+                </details>
+            `;
+        }
+
+        let sqlSnippet = '';
+        let resultSnippet = '';
+        const isDf = (parsedResult && parsedResult.type === 'dataframe') || (sqlQuery && sqlQuery.trim().startsWith('#'));
+
+        if (sqlQuery) {
+            const countBadge = (rowCount !== undefined && rowCount !== null) ? `${rowCount} ${isDf ? 'Einträge' : 'Treffer'}` : 'Ausgeführt';
+            const summaryTitle = isDf ? `🛠️ Ausgeführtes Analyse-Tool anzeigen (${countBadge})` : `🛠️ Generierte SQL-Abfrage anzeigen (${countBadge})`;
+            const copyBtnText = isDf ? '📋 Tool-Aufruf kopieren' : '📋 SQL kopieren';
+            sqlSnippet = `
+                <details class="sql-details">
+                    <summary>${summaryTitle}</summary>
+                    <div class="sql-code-container">
+                        <button type="button" class="btn-copy-sql" onclick="copySqlFromContainer(this)" title="In Zwischenablage kopieren">${copyBtnText}</button>
+                        <pre><code>${escapeHtml(sqlQuery)}</code></pre>
+                    </div>
+                </details>
+            `;
+        }
+
+        if (parsedResult) {
+            const rowText = (rowCount !== undefined && rowCount !== null) ? `${rowCount} Zeilen` : 'Tabelle';
+            const resultTitle = isDf ? `📊 Berechnete DataFrame-Statistiken anzeigen (${rowText})` : `📊 SQL-Abfrage-Ergebnis anzeigen (${rowText})`;
+            resultSnippet = `
+                <details class="sql-details sql-result-details">
+                    <summary>${resultTitle}</summary>
+                    ${renderSqlResultTable(parsedResult)}
+                </details>
+            `;
+        }
+
+        return sqlSnippet + resultSnippet;
+    }
+
+    // Versucht nach erfolgreichem Laden des Backup-Texts die SQL-Daten über den Sanitizer-Endpunkt nachzuladen
+    async function tryLoadSqlDetailsForMessage(messageId, wrapperEl) {
+        if (!messageId || !wrapperEl) return;
+        const bubble = wrapperEl.querySelector('.msg-bubble');
+        if (!bubble) return;
+
+        // Kleinen Lade-Hinweis unten in die Bubble setzen
+        const statusDiv = document.createElement('div');
+        statusDiv.className = 'sql-reload-status';
+        statusDiv.style.cssText = 'font-size: 11.5px; color: #666; margin-top: 8px; padding-top: 6px; border-top: 1px dashed #dce3e8;';
+        statusDiv.innerHTML = '🔄 <em>Versuche SQL-Abfrage & Ergebnistabelle separat nachzuladen...</em>';
+        bubble.appendChild(statusDiv);
+
+        try {
+            const resp = await fetch(`/api/ai/messages/${messageId}/sql_details`);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const sqlData = await resp.json();
+
+            if (sqlData.success && (sqlData.sql || sqlData.sql_result)) {
+                const detailsHtml = buildSqlDetailsHtml(sqlData.sql, sqlData.row_count, sqlData.sql_result);
+                statusDiv.remove();
+
+                const container = document.createElement('div');
+                container.innerHTML = detailsHtml;
+                bubble.appendChild(container);
+
+                if (sqlData.only_query_recovered) {
+                    const warnNote = document.createElement('div');
+                    warnNote.style.cssText = 'font-size: 11px; color: #b45309; margin-top: 4px;';
+                    warnNote.textContent = 'ℹ️ Hinweis: Die SQL-Abfrage wurde wiederhergestellt, die Ergebnistabelle konnte wegen Sonderzeichen nicht geladen werden.';
+                    bubble.appendChild(warnNote);
+                }
+            } else {
+                statusDiv.innerHTML = 'ℹ️ <em>Keine zusätzlichen SQL-Details zu dieser Antwort gespeichert.</em>';
+                setTimeout(() => statusDiv.remove(), 4000);
+            }
+        } catch (err) {
+            console.warn(`Nachladen der SQL-Daten für Nachricht ${messageId} fehlgeschlagen:`, err);
+            statusDiv.innerHTML = '⚠️ <em>SQL-Details konnten auch im zweiten Versuch nicht geladen werden (Antworttext ist vollständig).</em>';
+        }
+    }
+
     function renderMessages(messages) {
         const box = document.getElementById('chatMessages');
         box.innerHTML = '';
@@ -1252,7 +1445,11 @@
         }
 
         messages.forEach(m => {
-            appendMessageBubble(m.role, m.content, m.sql_query, m.row_count, m.sql_result, m.created_at, false);
+            const wrapper = appendMessageBubble(m.role, m.content, m.sql_query, m.row_count, m.sql_result, m.created_at, false);
+            // Falls die Nachricht über das Backup ohne SQL-Daten kam, einzeln im Hintergrund nachladen
+            if (m.role === 'model' && m.id && !m.sql_query && !m.sql_result) {
+                tryLoadSqlDetailsForMessage(m.id, wrapper);
+            }
         });
 
         box.scrollTop = box.scrollHeight;
@@ -1267,93 +1464,13 @@
         wrapper.className = `msg-wrapper msg-${role}`;
         wrapper.dataset.rawContent = content || '';
 
-        let parsedResult = sqlResult;
-        if (typeof parsedResult === 'string') {
-            try { parsedResult = JSON.parse(parsedResult); } catch (e) {}
-        }
-
         let bodyHtml = '';
         if (role === 'user') {
             bodyHtml = `<div class="msg-bubble">${escapeHtml(content).replace(/\n/g, '<br>')}</div>`;
         } else {
             // Model: Markdown Rendern mit marked.js
             const renderedMarkdown = marked.parse(content || '');
-            let queriesSnippet = '';
-
-            if (parsedResult && parsedResult.type === 'multi' && Array.isArray(parsedResult.steps) && parsedResult.steps.length > 0) {
-                // Neues Multi-Action / Multi-Step Format
-                const totalSteps = parsedResult.steps.length;
-                const totalRows = (rowCount !== undefined && rowCount !== null) ? rowCount : parsedResult.steps.reduce((acc, s) => acc + (s.total_rows || 0), 0);
-
-                let stepsHtml = '';
-                parsedResult.steps.forEach((step, idx) => {
-                    const stepNum = idx + 1;
-                    const stepLabel = escapeHtml(step.label || `Schritt ${stepNum}`);
-                    const isStepDf = step.query_type === 'dataframe' || (step.query && step.query.trim().startsWith('#'));
-                    const stepBadge = (step.total_rows !== undefined && step.total_rows !== null) ? `${step.total_rows} ${isStepDf ? 'Einträge' : 'Treffer'}` : '';
-                    const copyBtnText = isStepDf ? '📋 Tool kopieren' : '📋 SQL kopieren';
-
-                    stepsHtml += `
-                        <div class="multi-step-card" style="margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px;">
-                            <div style="font-weight: 600; font-size: 13px; margin-bottom: 6px; color: #64b5f6;">
-                                [${stepNum}/${totalSteps}] ${stepLabel} ${stepBadge ? `<span style="font-size: 11px; opacity: 0.8; font-weight: normal; color: #aaa;">(${stepBadge})</span>` : ''}
-                            </div>
-                            <div class="sql-code-container" style="margin-bottom: 8px;">
-                                <button type="button" class="btn-copy-sql" onclick="copySqlFromContainer(this)" title="In Zwischenablage kopieren">${copyBtnText}</button>
-                                <pre style="margin: 0;"><code>${escapeHtml(step.query || '')}</code></pre>
-                            </div>
-                            ${(step.columns && step.columns.length > 0) ? `
-                            <details class="sql-details sql-result-details" style="margin: 4px 0 0 0;">
-                                <summary style="font-size: 12px; cursor: pointer;">📊 Ergebnistabelle (${step.total_rows || step.row_count || 0} Zeilen anzeigen)</summary>
-                                ${renderSqlResultTable(step)}
-                            </details>
-                            ` : ''}
-                        </div>
-                    `;
-                });
-
-                queriesSnippet = `
-                    <details class="sql-details" style="margin-top: 12px;">
-                        <summary style="font-weight: 500;">🛠️ ${totalSteps} ausgeführte Abfragen & Analyse-Tools anzeigen (${totalRows} Treffer gesamt)</summary>
-                        <div style="padding: 4px 8px;">
-                            ${stepsHtml}
-                        </div>
-                    </details>
-                `;
-            } else {
-                // Altes Format als Fallback (Einzel-SQL oder Einzel-DataFrame)
-                let sqlSnippet = '';
-                let resultSnippet = '';
-                const isDf = (parsedResult && parsedResult.type === 'dataframe') || (sqlQuery && sqlQuery.trim().startsWith('#'));
-
-                if (sqlQuery) {
-                    const countBadge = (rowCount !== undefined && rowCount !== null) ? `${rowCount} ${isDf ? 'Einträge' : 'Treffer'}` : 'Ausgeführt';
-                    const summaryTitle = isDf ? `🛠️ Ausgeführtes Analyse-Tool anzeigen (${countBadge})` : `🛠️ Generierte SQL-Abfrage anzeigen (${countBadge})`;
-                    const copyBtnText = isDf ? '📋 Tool-Aufruf kopieren' : '📋 SQL kopieren';
-                    sqlSnippet = `
-                        <details class="sql-details">
-                            <summary>${summaryTitle}</summary>
-                            <div class="sql-code-container">
-                                <button type="button" class="btn-copy-sql" onclick="copySqlFromContainer(this)" title="In Zwischenablage kopieren">${copyBtnText}</button>
-                                <pre><code>${escapeHtml(sqlQuery)}</code></pre>
-                            </div>
-                        </details>
-                    `;
-                }
-
-                if (parsedResult) {
-                    const rowText = (rowCount !== undefined && rowCount !== null) ? `${rowCount} Zeilen` : 'Tabelle';
-                    const resultTitle = isDf ? `📊 Berechnete DataFrame-Statistiken anzeigen (${rowText})` : `📊 SQL-Abfrage-Ergebnis anzeigen (${rowText})`;
-                    resultSnippet = `
-                        <details class="sql-details sql-result-details">
-                            <summary>${resultTitle}</summary>
-                            ${renderSqlResultTable(parsedResult)}
-                        </details>
-                    `;
-                }
-
-                queriesSnippet = sqlSnippet + resultSnippet;
-            }
+            const queriesSnippet = buildSqlDetailsHtml(sqlQuery, rowCount, sqlResult);
 
             bodyHtml = `
                 <div class="msg-bubble">
@@ -1382,6 +1499,7 @@
         if (scroll) {
             box.scrollTop = box.scrollHeight;
         }
+        return wrapper;
     }
 
     function showLoadingIndicator() {
@@ -1450,12 +1568,41 @@
             try {
                 data = JSON.parse(rawText);
             } catch (e) {
+                console.warn('JSON-Parsing-Fehler bei /api/ai/chat, versuche Backup-Endpunkt (nur Text)...', e);
+                const backupData = await fetchBackupAnswer(currentChatId);
                 removeLoadingIndicator();
-                // Loggen des Parsing-Fehlers ins UI und als Nachricht
-                const parseErrHtml = `⚠️ **JSON-Parsing-Fehler:** Die Server-Antwort konnte nicht als JSON gelesen werden (vermutlich unescaped Sonderzeichen im Statustext oder abgeschnittene Daten).\n\n<pre style="background:#1e1e1e; color:#ff8888; padding:8px; font-size:11px; overflow:auto;">${escapeHtml(rawText.substring(0, 400))}</pre>`;
+
+                if (backupData) {
+                    currentChatId = backupData.chat_id;
+                    const titleEl = document.getElementById('activeChatTitle');
+                    if (titleEl && backupData.title) titleEl.textContent = backupData.title;
+                    const dlBtn = document.getElementById('downloadChatBtn');
+                    if (dlBtn) dlBtn.style.display = 'inline-flex';
+
+                    // 1. Zuerst sicher den reinen Antworttext anzeigen
+                    const bubbleWrapper = appendMessageBubble(
+                        'model',
+                        backupData.answer,
+                        null,
+                        null,
+                        null,
+                        backupData.created_at || new Date().toISOString(),
+                        true
+                    );
+
+                    // 2. Anschließend auf separatem Weg versuchen, die SQL-Daten für diese Nachricht nachzuladen
+                    if (backupData.message_id) {
+                        tryLoadSqlDetailsForMessage(backupData.message_id, bubbleWrapper);
+                    }
+
+                    await loadChatHistory();
+                    loadByokStatus();
+                    return;
+                }
+
+                // Falls auch das Backup nichts liefert, ursprünglichen Fehler anzeigen
+                const parseErrHtml = `⚠️ **JSON-Parsing-Fehler:** Die Server-Antwort konnte nicht als JSON gelesen werden und auch der Backup-Endpunkt lieferte keine Antwort.\n\n<pre style="background:#1e1e1e; color:#ff8888; padding:8px; font-size:11px; overflow:auto;">${escapeHtml(rawText.substring(0, 400))}</pre>`;
                 appendMessageBubble('model', parseErrHtml, null, null, null, new Date().toISOString(), true);
-                isWaitingForResponse = false;
-                document.getElementById('sendBtn').disabled = false;
                 return;
             }
 
@@ -1466,7 +1613,18 @@
                     appendMessageBubble('model', `⏳ **Rate-Limit erreicht!**\n\nDu hast deine 10 kostenlosen Anfragen für diese Stunde verbraucht.\n\n👉 **Tipp:** Du kannst oben auf [🔑 API-Key & Rate-Limit](javascript:openApiKeyModal()) klicken und deinen eigenen (kostenlosen) Google Gemini API-Key eintragen, um sofort unbegrenzt weiterzufragen.`, null, null, null, new Date().toISOString(), true);
                     loadByokStatus();
                 } else {
-                    appendMessageBubble('model', `⚠️ **Fehler:** ${data.error || 'Unbekannter Fehler bei der Abfrage.'}`, null, null, null, new Date().toISOString(), true);
+                    // Falls ein 500er Fehler erst beim Serialisieren der Antwort auftrat, prüfen ob die Antwort schon in der DB liegt
+                    const backupData = await fetchBackupAnswer(currentChatId);
+                    if (backupData) {
+                        currentChatId = backupData.chat_id;
+                        const bubbleWrapper = appendMessageBubble('model', backupData.answer, null, null, null, backupData.created_at || new Date().toISOString(), true);
+                        if (backupData.message_id) {
+                            tryLoadSqlDetailsForMessage(backupData.message_id, bubbleWrapper);
+                        }
+                        await loadChatHistory();
+                    } else {
+                        appendMessageBubble('model', `⚠️ **Fehler:** ${data.error || 'Unbekannter Fehler bei der Abfrage.'}`, null, null, null, new Date().toISOString(), true);
+                    }
                 }
             } else {
                 currentChatId = data.chat_id;
@@ -1482,8 +1640,22 @@
                 loadByokStatus();
             }
         } catch (e) {
+            // Auch bei einem abgebrochenen Request / Netzwerkfehler versuchen, die Antwort über den Backup-Endpunkt zu retten
+            const backupData = await fetchBackupAnswer(currentChatId);
             removeLoadingIndicator();
-            appendMessageBubble('model', `⚠️ **Netzwerkfehler:** ${e.message}`, null, null, null, new Date().toISOString(), true);
+            if (backupData) {
+                currentChatId = backupData.chat_id;
+                const titleEl = document.getElementById('activeChatTitle');
+                if (titleEl && backupData.title) titleEl.textContent = backupData.title;
+                const bubbleWrapper = appendMessageBubble('model', backupData.answer, null, null, null, backupData.created_at || new Date().toISOString(), true);
+                if (backupData.message_id) {
+                    tryLoadSqlDetailsForMessage(backupData.message_id, bubbleWrapper);
+                }
+                await loadChatHistory();
+                loadByokStatus();
+            } else {
+                appendMessageBubble('model', `⚠️ **Netzwerkfehler:** ${e.message}`, null, null, null, new Date().toISOString(), true);
+            }
         } finally {
             isWaitingForResponse = false;
             document.getElementById('sendBtn').disabled = false;
@@ -1596,7 +1768,51 @@
             if (data.is_admin) {
                 statusBox.style.background = '#e8f5e9';
                 statusBox.style.borderColor = '#c8e6c9';
-                statusText.innerHTML = `🛡️ <strong>Administrator-Account:</strong> Du bist vom Rate-Limit befreit (unbegrenzte Anfragen).`;
+
+                let adminHtml = `
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 6px;">
+                        <div>🛡️ <strong>Administrator-Account:</strong> Du bist vom internen Rate-Limit befreit (unbegrenzt).</div>
+                        <span class="badge-status badge-ok" style="font-size:11px;">Admin</span>
+                    </div>
+                `;
+
+                if (data.admin_info) {
+                    const info = data.admin_info;
+                    const keyBadgeColor = info.has_global_key ? '#2e7d32' : '#c62828';
+                    const keyBadgeBg = info.has_global_key ? 'rgba(46, 125, 50, 0.15)' : 'rgba(198, 40, 40, 0.15)';
+                    const pct24h = Math.min(100, Math.round((info.global_reqs_24h / info.google_rpd) * 100));
+
+                    adminHtml += `
+                        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(46, 125, 50, 0.3); font-size: 12.5px; line-height: 1.55; color: #1b5e20;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                <strong style="color: #004488;">🔑 Globaler Instanz-Key (.env):</strong>
+                                <span style="font-family: monospace; font-size: 11.5px; font-weight: 700; color: ${keyBadgeColor}; background: ${keyBadgeBg}; padding: 2px 8px; border-radius: 4px;">
+                                    ${escapeHtml(info.masked_global_key)}
+                                </span>
+                            </div>
+                            
+                            <div style="background: rgba(255,255,255,0.7); padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(46, 125, 50, 0.2); margin-top: 6px;">
+                                <div>• <strong>Offizielle Google Free-Tier Limits:</strong> 
+                                    <strong>${info.google_rpm} RPM</strong> (Anfragen/Min.) • 
+                                    <strong>${info.google_rpd.toLocaleString('de-DE')} RPD</strong> (Anfragen/Tag)
+                                </div>
+                                <div style="margin-top: 3px;">• <strong>Instanz-Verbrauch (letzte 24h):</strong> 
+                                    <strong>${info.global_reqs_24h}</strong> / ${info.google_rpd.toLocaleString('de-DE')} Anfragen 
+                                    <span style="color: ${pct24h > 80 ? '#c62828' : '#2e7d32'}; font-weight: 700;">(${pct24h}% des Tageskontingents)</span>
+                                </div>
+                                <div style="margin-top: 3px;">• <strong>Instanz-Verbrauch (letzte 60 Min.):</strong> 
+                                    <strong>${info.global_reqs_1h}</strong> Anfragen
+                                </div>
+                                <div style="margin-top: 3px;">• <strong>Nutzer auf Instanz-Key:</strong> 
+                                    <strong>${info.global_users_count}</strong> Accounts (App-Schutzlimit: 10 Anfragen/Std. pro Nutzer)
+                                </div>
+                                ${data.has_byok ? '<div style="margin-top: 3px; color: #004488;">• <em>Hinweis: Für deinen eigenen Account ist ein persönlicher BYOK-Key aktiv.</em></div>' : ''}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                statusText.innerHTML = adminHtml;
                 delBtn.style.display = data.has_byok ? 'inline-flex' : 'none';
                 if (badge) badge.innerHTML = `<span class="badge-status badge-ok" style="margin-left:4px;">Admin (Unbegrenzt)</span>`;
             } else if (data.has_byok) {

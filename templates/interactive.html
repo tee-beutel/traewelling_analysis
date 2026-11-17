@@ -11,6 +11,8 @@
 
     <!-- Chart.js für interaktive Live-Diagramme -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 
     <style>
         :root {
@@ -371,7 +373,7 @@
         /* Chart Container */
         #chartBox {
             display: none; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px;
-            padding: 15px; margin-bottom: 16px; height: 340px; position: relative;
+            padding: 15px; margin-bottom: 16px; min-height: 350px; height: auto; position: relative;
         }
 
         /* Visual Iframe / Plot Containers */
@@ -632,8 +634,8 @@
         </div>
     </div>
 
-    <!-- Live Sync Status Bar (falls DB-Sync läuft) -->
-    <div id="syncStatusBar" style="display:none; background:#1e1e1e; color:#00ff00; padding:10px 16px; border-radius:8px; margin-bottom:14px; font-family:monospace; font-size:12.5px;"></div>
+    <!-- Live Sync Widget -->
+    {% include 'sync_widget.html' %}
 
     <!-- Hinweis-Banner bei 0 Fahrten ohne aktive Filter -->
     <div id="noUserDataBanner" style="display: none; background: #fff8e1; border: 1px solid #ffe082; border-left: 5px solid #ff9800; border-radius: 8px; padding: 12px 16px; margin-bottom: 14px; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
@@ -840,19 +842,42 @@
 
                 <!-- Optional Interactive Chart.js Box -->
                 <div id="chartBox">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                        <div style="display:flex; gap:8px; align-items:center;">
-                            <strong style="font-size:13px; color:var(--primary);">📈 Visuelle Auswertung (Klick auf Balken = Drill-Down):</strong>
-                            <select id="chartMetricSelect" class="form-control" style="width:auto; padding:3px 8px; font-size:12px;" onchange="updateInteractiveChart()"></select>
-                            <select id="chartTypeSelect" class="form-control" style="width:auto; padding:3px 8px; font-size:12px;" onchange="updateInteractiveChart()">
-                                <option value="bar">Balkendiagramm</option>
-                                <option value="doughnut">Kreis-/Donut-Diagramm (Top 12)</option>
+                    <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                            <strong style="font-size:13px; color:var(--primary);">📈 Visuelle Auswertung:</strong>
+                            <button type="button" class="btn btn-sm btn-secondary" onclick="toggleInteractiveChart()">Ausblenden ✖</button>
+                        </div>
+
+                        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                            <!-- Nur im Shared-Modus sichtbar -->
+                            <select id="sharedChartModeSelect" class="form-control" style="display:none; width:auto; max-width:100%; padding:5px 8px; font-size:12.5px; font-weight:600; border-color:var(--primary);" onchange="updateInteractiveChart()">
+                                <option value="by_user">👥 User nebeneinander pro Kategorie</option>
+                                <option value="sum_all">∑ Alle User aufsummiert (Kategorien)</option>
+                            </select>
+
+                            <select id="chartMetricSelect" class="form-control" style="width:auto; max-width:100%; padding:5px 8px; font-size:12.5px;" onchange="updateInteractiveChart()"></select>
+
+                            <select id="chartTypeSelect" class="form-control" style="width:auto; max-width:100%; padding:5px 8px; font-size:12.5px;" onchange="updateInteractiveChart()">
+                                <option value="bar">Balkendiagramm (gruppiert)</option>
+                                <option value="bar_stacked">Balkendiagramm (gestapelt)</option>
                                 <option value="line">Liniendiagramm</option>
+                                <option value="doughnut">Kreis-/Donut-Diagramm (Top 12)</option>
                             </select>
                         </div>
-                        <button type="button" class="btn btn-sm btn-secondary" onclick="toggleInteractiveChart()">Ausblenden ✖</button>
+
+                        <!-- Responsive Zoom & Pan Controls -->
+                        <div id="chartZoomControls" style="display:flex; flex-wrap:wrap; align-items:center; gap:5px; background:#f1f5f9; padding:5px 8px; border-radius:6px; border:1px solid #cbd5e1;">
+                            <span style="font-size:11.5px; font-weight:700; color:#475569;">Zoom:</span>
+                            <button type="button" class="btn btn-sm" style="padding:3px 9px; font-size:12px; background:#fff; color:#333; border:1px solid #cbd5e1; border-radius:4px; cursor:pointer;" onclick="zoomInteractiveChart(1.3)" title="Hineinzoomen">🔍+</button>
+                            <button type="button" class="btn btn-sm" style="padding:3px 9px; font-size:12px; background:#fff; color:#333; border:1px solid #cbd5e1; border-radius:4px; cursor:pointer;" onclick="zoomInteractiveChart(0.7)" title="Herauszoomen">🔍−</button>
+                            <button type="button" class="btn btn-sm" style="padding:3px 9px; font-size:12px; background:#fff; color:#333; border:1px solid #cbd5e1; border-radius:4px; cursor:pointer;" onclick="panInteractiveChart(-5)" title="Nach links">◀</button>
+                            <button type="button" class="btn btn-sm" style="padding:3px 9px; font-size:12px; background:#fff; color:#333; border:1px solid #cbd5e1; border-radius:4px; cursor:pointer;" onclick="panInteractiveChart(5)" title="Nach rechts">▶</button>
+                            <button type="button" class="btn btn-sm" style="padding:3px 8px; font-size:11.5px; background:#fff; color:#333; border:1px solid #cbd5e1; border-radius:4px; cursor:pointer;" onclick="resetInteractiveChartZoom(false)">↺ Top 25</button>
+                            <button type="button" class="btn btn-sm" style="padding:3px 8px; font-size:11.5px; background:#fff; color:#333; border:1px solid #cbd5e1; border-radius:4px; cursor:pointer;" onclick="resetInteractiveChartZoom(true)">🌐 Alle</button>
+                            <span id="chartZoomStatus" style="font-size:11.5px; font-weight:700; color:#004488; margin-left:auto;"></span>
+                        </div>
                     </div>
-                    <div style="height: 280px;">
+                    <div style="height: 290px; width: 100%; position: relative;">
                         <canvas id="interactiveCanvas"></canvas>
                     </div>
                 </div>
@@ -1046,9 +1071,26 @@
             <label style="font-size:13px; font-weight:bold; display:block; margin-bottom:5px;">Feld / Parameter:</label>
             <select id="manualFilterCol" class="form-control" onchange="onManualFilterColChange()"></select>
         </div>
-        <div style="margin-bottom: 16px;">
-            <label style="font-size:13px; font-weight:bold; display:block; margin-bottom:5px;">Exakter Wert (z. B. Fernverkehr, ICE 100, Braunschweig Hbf (HBS)):</label>
+        <div id="manualFilterValContainer" style="margin-bottom: 16px;">
+            <label id="manualFilterValLabel" style="font-size:13px; font-weight:bold; display:block; margin-bottom:5px;">Exakter Wert (z. B. Fernverkehr, ICE 100, Braunschweig Hbf (HBS)):</label>
             <select id="manualFilterVal" placeholder="Tippen zum Suchen oder aus Liste wählen..."></select>
+        </div>
+        <div id="manualFilterDelayContainer" style="margin-bottom: 16px; display: none;">
+            <label id="manualFilterDelayLabel" style="font-size:13px; font-weight:bold; display:block; margin-bottom:5px;">Bedingung &amp; Verspätung (in Minuten):</label>
+            <div style="display: grid; grid-template-columns: 85px 1fr auto; gap: 8px; align-items: center;">
+                <select id="manualFilterOp" class="form-control" style="font-size: 15px; font-weight: bold; text-align: center;">
+                    <option value=">">&gt;</option>
+                    <option value=">=" selected>&gt;=</option>
+                    <option value="=">=</option>
+                    <option value="<=">&lt;=</option>
+                    <option value="<">&lt;</option>
+                </select>
+                <input type="number" id="manualFilterNum" class="form-control" placeholder="z. B. 5" step="1" value="5" onkeydown="if(event.key === 'Enter') applyManualFilter()">
+                <span style="font-size: 13px; color: #555; font-weight: 600;">Minuten</span>
+            </div>
+            <div style="font-size: 11px; color: #666; margin-top: 6px;">
+                Gilt für Fahrten mit Echtzeitdaten. Negative Zahlen für Verfrühung (z. B. &lt; 0), 0 für pünktlich.
+            </div>
         </div>
         <div style="display:flex; justify-content:flex-end; gap:8px;">
             <button type="button" class="btn btn-secondary" onclick="closeAddFilterModal()">Abbrechen</button>
@@ -1359,10 +1401,20 @@
         reloadCurrentModule();
     }
 
-    function addOrUpdateFilter(col, val, labelText) {
-        const existingIdx = activeFilters.findIndex(f => f.col === col && String(f.val) === String(val));
+    function addOrUpdateFilter(col, val, labelText, op) {
+        const filterOp = op || null;
+        const existingIdx = activeFilters.findIndex(f => f.col === col && (f.op || null) === filterOp && String(f.val) === String(val));
         if (existingIdx === -1) {
-            activeFilters.push({ col, val, label: labelText });
+            const sameColAndOpIdx = activeFilters.findIndex(f => f.col === col && (f.op || null) === filterOp);
+            if (filterOp && sameColAndOpIdx !== -1) {
+                activeFilters[sameColAndOpIdx] = { col, val, op: filterOp, label: labelText };
+            } else {
+                const item = { col, val, label: labelText };
+                if (filterOp) item.op = filterOp;
+                activeFilters.push(item);
+            }
+        } else {
+            activeFilters[existingIdx].label = labelText;
         }
         updateBreadcrumbUI();
     }
@@ -2167,7 +2219,12 @@
                 const encFilters = encodeURIComponent(JSON.stringify(rowFilters));
                 return `<span class="drill-metric-pill" onclick="drillToTarget('${encFilters}', 'journeys', [], 'Fahrten (${escapeHtml(stopName)})')">${escapeHtml(dispVal)} 🚆</span>`;
             }
-            if (stopName && (colName === 'insgesamt' || colName === 'Nur Via')) {
+            if (stopName && colName === 'Nur Via') {
+                const rowFilters = [{ col: 'stop_via', val: stopName, label: `Hst. (Via): ${stopName}` }];
+                const encFilters = encodeURIComponent(JSON.stringify(rowFilters));
+                return `<span class="drill-metric-pill" onclick="drillToTarget('${encFilters}', 'journeys', [], 'Fahrten mit Via (${escapeHtml(stopName)})')">${escapeHtml(dispVal)} 🚉</span>`;
+            }
+            if (stopName && colName === 'insgesamt') {
                 const rowFilters = [{ col: 'any_stop_via', val: stopName, label: `Hst. (inkl. Via): ${stopName}` }];
                 const encFilters = encodeURIComponent(JSON.stringify(rowFilters));
                 return `<span class="drill-metric-pill" onclick="drillToTarget('${encFilters}', 'journeys', [], 'Fahrten inkl. Via (${escapeHtml(stopName)})')">${escapeHtml(dispVal)} 🚉</span>`;
@@ -2381,8 +2438,11 @@
             }
             if (id === 'manualFilterCol') {
                 html += `<optgroup label="Spezial-Filter">
+                    <option value="stop_via">Haltestelle (Via)</option>
                     <option value="any_stop">Haltestelle (Start oder Ziel)</option>
                     <option value="any_stop_via">Haltestelle (Start, Ziel oder Via)</option>
+                    <option value="arrivalDelay">Ankunftsverspätung</option>
+                    <option value="departureDelay">Abfahrtsverspätung</option>
                     <option value="geo_countryName">Land (Start oder Ziel)</option>
                     <option value="geo_city">Stadt (Start oder Ziel)</option>
                 </optgroup>`;
@@ -2435,64 +2495,464 @@
 
     function populateChartMetrics(data) {
         const sel = document.getElementById('chartMetricSelect');
+        const sharedModeSel = document.getElementById('sharedChartModeSelect');
         const cols = data.columns || [];
+        const stype = data.sheet_type;
+        const isShared = (analysisMode === 'shared' || (stype && stype.startsWith('shared_')));
+
+        if (sharedModeSel) {
+            sharedModeSel.style.display = isShared ? 'inline-block' : 'none';
+        }
+
+        if (isShared && stype === 'shared_stops_filterable') {
+            sel.innerHTML = '<option value="Besuche">Besuche (Halt/Via)</option>';
+            sel.value = 'Besuche';
+            sel.disabled = true;
+            return;
+        }
+        sel.disabled = false;
+
+        const excludeCols = new Set([...(data.group_labels || []), 'User', 'Platz', 'Haltestelle']);
         const numericCols = cols.filter(c => {
-            if ((data.group_labels || []).includes(c) || c === 'User' || c === 'Platz') return false;
+            if (excludeCols.has(c)) return false;
             return data.rows.some(r => typeof r[c] === 'number' || (!isNaN(parseFloat(r[c])) && String(r[c]).match(/^-?\d+(\.\d+)?$/)));
         });
+
         const prev = sel.value;
-        sel.innerHTML = numericCols.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
-        if (numericCols.includes(prev)) sel.value = prev;
-        else if (numericCols.includes('Distanz (km)')) sel.value = 'Distanz (km)';
-        else if (numericCols.includes('Fahrten')) sel.value = 'Fahrten';
+        let html = '';
+        if (!isShared && numericCols.length > 1 && numericCols.length <= 6) {
+            html += `<option value="__ALL_COLS__">📊 Alle Spalten vergleichen (${numericCols.length})</option>`;
+        }
+        html += numericCols.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+        sel.innerHTML = html;
+
+        if (numericCols.includes(prev)) {
+            sel.value = prev;
+        } else if (numericCols.includes('Distanz (km)')) {
+            sel.value = 'Distanz (km)';
+        } else if (numericCols.includes('Fahrten')) {
+            sel.value = 'Fahrten';
+        } else if (numericCols.includes('Besuche insgesamt')) {
+            sel.value = 'Besuche insgesamt';
+        } else if (numericCols.length > 0) {
+            sel.value = numericCols[0];
+        }
     }
 
     function updateInteractiveChart() {
         if (!lastQueryResult || !lastQueryResult.rows || lastQueryResult.rows.length === 0) return;
         const metric = document.getElementById('chartMetricSelect').value;
         const chartType = document.getElementById('chartTypeSelect').value;
+        const sharedMode = document.getElementById('sharedChartModeSelect')?.value || 'by_user';
         if (!metric) return;
 
-        const gLabels = lastQueryResult.group_labels && lastQueryResult.group_labels.length > 0
-            ? lastQueryResult.group_labels
-            : [lastQueryResult.columns[0]];
+        const stype = lastQueryResult.sheet_type;
+        const isShared = (analysisMode === 'shared' || (stype && stype.startsWith('shared_')));
+        const selectedUsers = typeof getSelectedUsers === 'function' ? getSelectedUsers() : [];
 
-        const maxItems = chartType === 'doughnut' ? 12 : 30;
-        const sliceRows = lastQueryResult.rows.filter(r => r[gLabels[0]] !== '').slice(0, maxItems);
+        const palette = [
+            '#004488', '#e63900', '#28a745', '#911eb4', '#ff9800', '#4363d8',
+            '#e6194b', '#3cb44b', '#ffe119', '#42d4f4', '#f032e6', '#469990',
+            '#9A6324', '#800000', '#000075', '#808000'
+        ];
 
-        const labels = sliceRows.map(r => gLabels.map(l => r[l]).filter(Boolean).join(' / '));
-        const values = sliceRows.map(r => parseFloat(r[metric]) || 0);
+        let actualChartType = (chartType === 'bar_stacked') ? 'bar' : chartType;
+        const isStacked = (chartType === 'bar_stacked');
+
+        let chartLabels = [];
+        let datasets = [];
+        let sliceRows = [];
+
+        // =========================================================
+        // FALL 1: SHARED GROUPED (Kategorie, Betreiber, Linie, etc.)
+        // =========================================================
+        if (isShared && stype === 'shared_grouped') {
+            const gLabels = lastQueryResult.group_labels && lastQueryResult.group_labels.length > 0
+                ? lastQueryResult.group_labels
+                : [lastQueryResult.columns[0]];
+
+            // In create_shared_grouped_dataframe werden wiederholte Gruppenwerte in Folgezeilen geleert -> auffüllen!
+            let lastVals = {};
+            const normalizedRows = [];
+            for (const r of lastQueryResult.rows) {
+                const isEmptySeparator = Object.values(r).every(v => v === '' || v === null || v === undefined);
+                if (isEmptySeparator) continue;
+
+                const copy = { ...r };
+                gLabels.forEach(lbl => {
+                    if (copy[lbl] !== '' && copy[lbl] !== null && copy[lbl] !== undefined) {
+                        lastVals[lbl] = copy[lbl];
+                    } else {
+                        copy[lbl] = lastVals[lbl] || '';
+                    }
+                });
+                copy.__catKey__ = gLabels.map(l => copy[l]).filter(Boolean).join(' / ');
+                if (copy.__catKey__) normalizedRows.push(copy);
+            }
+
+            // Alle eindeutigen Kategorien + Alle User ermitteln
+            const categories = [...new Set(normalizedRows.map(r => r.__catKey__))];
+            const usersInTable = [...new Set(normalizedRows.map(r => r['User']).filter(Boolean))];
+            const allUsers = [...new Set([...selectedUsers, ...usersInTable])];
+
+            // Lookup-Map: category -> user -> val
+            const valMap = {};
+            categories.forEach(c => { valMap[c] = {}; });
+            normalizedRows.forEach(r => {
+                valMap[r.__catKey__][r['User']] = parseFloat(r[metric]) || 0;
+            });
+
+            if (sharedMode === 'sum_all') {
+                // Modus: Alle User pro Kategorie aufsummieren & Kategorien nebeneinander anzeigen
+                const summedCats = categories.map(cat => {
+                    const sum = allUsers.reduce((acc, u) => acc + (valMap[cat][u] || 0), 0);
+                    return { cat, sum: Math.round(sum * 100) / 100 };
+                }).sort((a, b) => b.sum - a.sum);
+
+                const limited = chartType === 'doughnut' ? summedCats.slice(0, 12) : summedCats;
+                chartLabels = limited.map(x => x.cat);
+                sliceRows = limited.map(x => normalizedRows.find(r => r.__catKey__ === x.cat) || {});
+                datasets = [{
+                    label: `${metric} (Summe über ${allUsers.length} User)`,
+                    data: limited.map(x => x.sum),
+                    backgroundColor: chartType === 'doughnut'
+                        ? limited.map((_, i) => palette[i % palette.length])
+                        : '#004488',
+                    borderColor: chartType === 'doughnut' ? '#ffffff' : '#004488',
+                    borderWidth: chartType === 'doughnut' ? 2 : 1,
+                    borderRadius: 4
+                }];
+            } else {
+                // Modus: Kategorien auf X-Achse, pro Kategorie ein Balken je User
+                const sortedCats = [...categories].sort((a, b) => {
+                    const sumA = allUsers.reduce((acc, u) => acc + (valMap[a][u] || 0), 0);
+                    const sumB = allUsers.reduce((acc, u) => acc + (valMap[b][u] || 0), 0);
+                    return sumB - sumA;
+                });
+                const limited = chartType === 'doughnut' ? sortedCats.slice(0, 12) : sortedCats;
+                chartLabels = limited;
+                sliceRows = limited.map(cat => normalizedRows.find(r => r.__catKey__ === cat) || {});
+
+                if (chartType === 'doughnut') {
+                    // Im Donut-Modus Anteil je User über alle Kategorien
+                    chartLabels = allUsers;
+                    datasets = [{
+                        label: metric,
+                        data: allUsers.map(u => categories.reduce((acc, c) => acc + (valMap[c][u] || 0), 0)),
+                        backgroundColor: allUsers.map((_, i) => palette[i % palette.length]),
+                        borderColor: '#ffffff',
+                        borderWidth: 2
+                    }];
+                } else {
+                    datasets = allUsers.map((u, idx) => {
+                        const color = palette[idx % palette.length];
+                        return {
+                            label: u,
+                            data: chartLabels.map(cat => valMap[cat][u] || 0),
+                            backgroundColor: color,
+                            borderColor: color,
+                            borderWidth: 1,
+                            borderRadius: isStacked ? 0 : 3,
+                            tension: 0.2
+                        };
+                    });
+                }
+            }
+        }
+        // =========================================================
+        // FALL 2: SHARED STOPS FILTERABLE (Haltestellen (filterbar))
+        // =========================================================
+        else if (isShared && stype === 'shared_stops_filterable') {
+            const validRows = lastQueryResult.rows.filter(r => r['Haltestelle'] !== '' && r['Haltestelle'] != null);
+            const userCols = (lastQueryResult.columns || []).filter(c => c !== 'Haltestelle' && (selectedUsers.includes(c) || validRows.some(r => r[c] !== undefined)));
+            const allUsers = userCols.length > 0 ? userCols : selectedUsers;
+
+            if (sharedMode === 'sum_all') {
+                const summedStops = validRows.map(r => {
+                    const sum = allUsers.reduce((acc, u) => acc + (parseFloat(r[u]) || 0), 0);
+                    return { name: r['Haltestelle'], sum: sum, row: r };
+                }).sort((a, b) => b.sum - a.sum);
+
+                const limited = chartType === 'doughnut' ? summedStops.slice(0, 12) : summedStops;
+                chartLabels = limited.map(x => x.name);
+                sliceRows = limited.map(x => x.row);
+                datasets = [{
+                    label: `Besuche (Summe über ${allUsers.length} User)`,
+                    data: limited.map(x => x.sum),
+                    backgroundColor: chartType === 'doughnut'
+                        ? limited.map((_, i) => palette[i % palette.length])
+                        : '#004488',
+                    borderColor: chartType === 'doughnut' ? '#ffffff' : '#004488',
+                    borderWidth: chartType === 'doughnut' ? 2 : 1,
+                    borderRadius: 4
+                }];
+            } else {
+                const sortedStops = [...validRows].sort((a, b) => {
+                    const sumA = allUsers.reduce((acc, u) => acc + (parseFloat(a[u]) || 0), 0);
+                    const sumB = allUsers.reduce((acc, u) => acc + (parseFloat(b[u]) || 0), 0);
+                    return sumB - sumA;
+                });
+                const limited = chartType === 'doughnut' ? sortedStops.slice(0, 12) : sortedStops;
+                chartLabels = limited.map(r => r['Haltestelle']);
+                sliceRows = limited;
+
+                if (chartType === 'doughnut') {
+                    chartLabels = allUsers;
+                    datasets = [{
+                        label: 'Besuche',
+                        data: allUsers.map(u => validRows.reduce((acc, r) => acc + (parseFloat(r[u]) || 0), 0)),
+                        backgroundColor: allUsers.map((_, i) => palette[i % palette.length]),
+                        borderColor: '#ffffff',
+                        borderWidth: 2
+                    }];
+                } else {
+                    datasets = allUsers.map((u, idx) => {
+                        const color = palette[idx % palette.length];
+                        return {
+                            label: u,
+                            data: chartLabels.map((_, i) => parseFloat(limited[i][u]) || 0),
+                            backgroundColor: color,
+                            borderColor: color,
+                            borderWidth: 1,
+                            borderRadius: isStacked ? 0 : 3,
+                            tension: 0.2
+                        };
+                    });
+                }
+            }
+        }
+        // =========================================================
+        // FALL 3: SHARED STATS (Team-Statistik-Blatt)
+        // =========================================================
+        else if (isShared && stype === 'shared_stats') {
+            const validRows = lastQueryResult.rows.filter(r => r['User']);
+            if (sharedMode === 'sum_all') {
+                const total = validRows.reduce((acc, r) => acc + (parseFloat(r[metric]) || 0), 0);
+                chartLabels = [`Gesamt (${validRows.length} User)`];
+                datasets = [{
+                    label: metric,
+                    data: [Math.round(total * 100) / 100],
+                    backgroundColor: '#004488',
+                    borderRadius: 4
+                }];
+            } else {
+                const sorted = [...validRows].sort((a, b) => (parseFloat(b[metric]) || 0) - (parseFloat(a[metric]) || 0));
+                chartLabels = sorted.map(r => r['User']);
+                datasets = [{
+                    label: metric,
+                    data: sorted.map(r => parseFloat(r[metric]) || 0),
+                    backgroundColor: sorted.map((_, i) => palette[i % palette.length]),
+                    borderRadius: 4
+                }];
+            }
+        }
+        // =========================================================
+        // FALL 4: EINZEL-USER AUSWERTUNG / STANDARD
+        // =========================================================
+        else {
+            const gLabels = lastQueryResult.group_labels && lastQueryResult.group_labels.length > 0
+                ? lastQueryResult.group_labels
+                : [lastQueryResult.columns[0]];
+
+            const validRows = lastQueryResult.rows.filter(r => r[gLabels[0]] !== '' && r[gLabels[0]] != null);
+            sliceRows = chartType === 'doughnut' ? validRows.slice(0, 12) : validRows.slice(0, 500);
+            chartLabels = sliceRows.map(r => gLabels.map(l => r[l]).filter(Boolean).join(' / '));
+
+            const isAllCols = (metric === '__ALL_COLS__');
+            if (isAllCols) {
+                const excludeCols = new Set([...gLabels, 'User', 'Platz', 'Haltestelle']);
+                const numericCols = (lastQueryResult.columns || []).filter(c => {
+                    if (excludeCols.has(c)) return false;
+                    return lastQueryResult.rows.some(r => typeof r[c] === 'number' || (!isNaN(parseFloat(r[c])) && String(r[c]).match(/^-?\d+(\.\d+)?$/)));
+                });
+                datasets = numericCols.map((colName, idx) => ({
+                    label: colName,
+                    data: sliceRows.map(r => parseFloat(r[colName]) || 0),
+                    backgroundColor: palette[idx % palette.length],
+                    borderColor: palette[idx % palette.length],
+                    borderWidth: 1,
+                    borderRadius: isStacked ? 0 : 3
+                }));
+            } else {
+                datasets = [{
+                    label: metric,
+                    data: sliceRows.map(r => parseFloat(r[metric]) || 0),
+                    backgroundColor: chartType === 'doughnut'
+                        ? sliceRows.map((_, i) => palette[i % palette.length])
+                        : '#004488',
+                    borderColor: chartType === 'doughnut' ? '#ffffff' : '#004488',
+                    borderWidth: chartType === 'doughnut' ? 2 : 1,
+                    borderRadius: 3,
+                    tension: 0.2
+                }];
+            }
+        }
 
         const ctx = document.getElementById('interactiveCanvas').getContext('2d');
         if (chartInstance) chartInstance.destroy();
 
-        const palette = ['#004488', '#e63900', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#469990', '#f032e6', '#fabed4', '#008080', '#9A6324', '#800000'];
+        const initialWindowSize = 25;
+        const needsZoomWindow = (chartType !== 'doughnut') && (chartLabels.length > initialWindowSize);
+
+        const scalesConfig = (chartType === 'doughnut') ? {} : {
+            x: {
+                stacked: isStacked,
+                min: needsZoomWindow ? 0 : undefined,
+                max: needsZoomWindow ? (initialWindowSize - 1) : undefined,
+                ticks: { autoSkip: false, maxRotation: 45, minRotation: 20, font: { size: 11 } },
+                grid: { display: false }
+            },
+            y: {
+                stacked: isStacked,
+                beginAtZero: true,
+                ticks: { font: { size: 11 } }
+            }
+        };
 
         chartInstance = new Chart(ctx, {
-            type: chartType,
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: metric,
-                    data: values,
-                    backgroundColor: chartType === 'doughnut' ? palette : '#004488',
-                    borderColor: '#003366',
-                    borderWidth: 1
-                }]
-            },
+            type: actualChartType,
+            data: { labels: chartLabels, datasets: datasets },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                scales: scalesConfig,
+                plugins: {
+                    legend: {
+                        display: (chartType === 'doughnut') || (datasets.length > 1),
+                        position: 'top',
+                        labels: { boxWidth: 12, padding: 8, font: { size: 12, weight: 'bold' } }
+                    },
+                    tooltip: {
+                        enabled: true,
+                        mode: isStacked ? 'index' : (actualChartType === 'line' ? 'index' : 'nearest'),
+                        intersect: !isStacked && actualChartType !== 'line'
+                    },
+                    zoom: chartType === 'doughnut' ? undefined : {
+                        pan: { enabled: true, mode: 'x', threshold: 5, onPanComplete: ({chart}) => updateZoomBadge(chart) },
+                        zoom: { wheel: { enabled: true, speed: 0.1 }, pinch: { enabled: true }, mode: 'x', onZoomComplete: ({chart}) => updateZoomBadge(chart) },
+                        limits: { x: { min: 0, max: Math.max(0, chartLabels.length - 1), minRange: 2 } }
+                    }
+                },
                 onClick: (evt, elements) => {
                     if (elements.length > 0 && lastQueryResult.group_args && lastQueryResult.group_args.length > 0) {
+                        if (chartType === 'doughnut' && (sharedMode === 'by_user' || isShared)) return;
                         const idx = elements[0].index;
                         const clickedRow = sliceRows[idx];
-                        const rf = extractRowGroupFilters(clickedRow, lastQueryResult.group_args, lastQueryResult.group_labels);
-                        openDrillPopover(evt.native, encodeURIComponent(JSON.stringify(rf)), labels[idx]);
+                        if (clickedRow) {
+                            const rf = extractRowGroupFilters(clickedRow, lastQueryResult.group_args, lastQueryResult.group_labels);
+                            openDrillPopover(evt.native, encodeURIComponent(JSON.stringify(rf)), chartLabels[idx] || '');
+                        }
                     }
                 }
             }
         });
+
+        const zoomControls = document.getElementById('chartZoomControls');
+        if (zoomControls) {
+            zoomControls.style.display = (chartType !== 'doughnut') ? 'flex' : 'none';
+        }
+        updateZoomBadge(chartInstance);
+    }
+
+    function updateZoomBadge(chart) {
+        const badge = document.getElementById('chartZoomStatus');
+        if (!badge) return;
+        if (!chart || !chart.scales || !chart.scales.x || !chart.data || !chart.data.labels) {
+            badge.textContent = '';
+            return;
+        }
+        const total = chart.data.labels.length;
+        if (total <= 1) {
+            badge.textContent = '';
+            return;
+        }
+        const x = chart.scales.x;
+        const minIdx = Math.max(0, Math.round(x.min ?? 0));
+        const maxIdx = Math.min(total - 1, Math.round(x.max ?? (total - 1)));
+        if (minIdx === 0 && maxIdx >= total - 1) {
+            badge.textContent = `Alle ${total}`;
+        } else {
+            badge.textContent = `${minIdx + 1}–${maxIdx + 1} von ${total}`;
+        }
+    }
+
+    function zoomInteractiveChart(factor) {
+        if (!chartInstance || !chartInstance.scales || !chartInstance.scales.x) return;
+        const x = chartInstance.scales.x;
+        const total = chartInstance.data.labels.length;
+        if (total <= 3) return;
+
+        const currentMin = typeof x.min === 'number' ? x.min : 0;
+        const currentMax = typeof x.max === 'number' ? x.max : (total - 1);
+        const range = currentMax - currentMin;
+        const newRange = Math.max(3, Math.min(total - 1, Math.round(range / factor)));
+        const center = (currentMin + currentMax) / 2;
+        let newMin = Math.round(center - newRange / 2);
+        let newMax = newMin + newRange;
+
+        if (newMin < 0) {
+            newMin = 0;
+            newMax = Math.min(total - 1, newRange);
+        }
+        if (newMax >= total) {
+            newMax = total - 1;
+            newMin = Math.max(0, newMax - newRange);
+        }
+
+        if (chartInstance.options.scales && chartInstance.options.scales.x) {
+            chartInstance.options.scales.x.min = newMin;
+            chartInstance.options.scales.x.max = newMax;
+        }
+        chartInstance.update();
+        updateZoomBadge(chartInstance);
+    }
+
+    function panInteractiveChart(stepItems) {
+        if (!chartInstance || !chartInstance.scales || !chartInstance.scales.x) return;
+        const x = chartInstance.scales.x;
+        const total = chartInstance.data.labels.length;
+        if (total <= 1) return;
+
+        const currentMin = typeof x.min === 'number' ? x.min : 0;
+        const currentMax = typeof x.max === 'number' ? x.max : (total - 1);
+        const range = currentMax - currentMin;
+        if (range >= total - 1) return; // already showing all
+
+        let newMin = currentMin + stepItems;
+        let newMax = currentMax + stepItems;
+
+        if (newMin < 0) {
+            newMin = 0;
+            newMax = Math.min(total - 1, range);
+        }
+        if (newMax >= total) {
+            newMax = total - 1;
+            newMin = Math.max(0, newMax - range);
+        }
+
+        if (chartInstance.options.scales && chartInstance.options.scales.x) {
+            chartInstance.options.scales.x.min = newMin;
+            chartInstance.options.scales.x.max = newMax;
+        }
+        chartInstance.update();
+        updateZoomBadge(chartInstance);
+    }
+
+    function resetInteractiveChartZoom(showAll = false) {
+        if (!chartInstance || !chartInstance.scales || !chartInstance.scales.x) return;
+        const total = chartInstance.data.labels.length;
+        if (showAll || total <= 25) {
+            chartInstance.options.scales.x.min = 0;
+            chartInstance.options.scales.x.max = total - 1;
+        } else {
+            chartInstance.options.scales.x.min = 0;
+            chartInstance.options.scales.x.max = Math.min(24, total - 1);
+        }
+        if (typeof chartInstance.resetZoom === 'function' && !showAll) {
+            try { chartInstance.resetZoom(); } catch (e) {}
+        }
+        chartInstance.update();
+        updateZoomBadge(chartInstance);
     }
 
     // ==========================================
@@ -2699,7 +3159,10 @@
     }
 
     function fetchManualFilterSuggestions(query, callback) {
-        const col = document.getElementById('manualFilterCol').value;
+        const colEl = document.getElementById('manualFilterCol');
+        if (!colEl) return callback();
+        const col = colEl.value;
+        if (col === 'delay' || col === 'arrivalDelay' || col === 'departureDelay') return callback();
         const users = analysisMode === 'user' ? [getPrimaryUser()] : getSelectedUsers();
         fetch('/api/interactive/filter_values', {
             method: 'POST',
@@ -2721,15 +3184,38 @@
     }
 
     function onManualFilterColChange() {
-        if (!tomFilterValSelect) return;
-        tomFilterValSelect.clear(true);
-        tomFilterValSelect.clearOptions();
-        tomFilterValSelect.load('');
-    }
+        const colEl = document.getElementById('manualFilterCol');
+        if (!colEl) return;
+        const col = colEl.value;
+        const valContainer = document.getElementById('manualFilterValContainer');
+        const delayContainer = document.getElementById('manualFilterDelayContainer');
+        const valLabel = document.getElementById('manualFilterValLabel');
+        const delayLabel = document.getElementById('manualFilterDelayLabel');
 
-    function openAddFilterModal() {
-        document.getElementById('addFilterModal').classList.add('active');
-        if (tomFilterValSelect) {
+        const isDelayCol = (col === 'delay' || col === 'arrivalDelay' || col === 'departureDelay');
+
+        if (isDelayCol) {
+            if (valContainer) valContainer.style.display = 'none';
+            if (delayContainer) delayContainer.style.display = 'block';
+            if (delayLabel) {
+                delayLabel.innerHTML = (col === 'departureDelay')
+                    ? 'Bedingung &amp; <strong>Abfahrtsverspätung</strong> (in Minuten):'
+                    : 'Bedingung &amp; <strong>Ankunftsverspätung</strong> (in Minuten):';
+            }
+            const numInput = document.getElementById('manualFilterNum');
+            if (numInput) setTimeout(() => { numInput.focus(); numInput.select(); }, 50);
+        } else {
+            if (valContainer) valContainer.style.display = 'block';
+            if (delayContainer) delayContainer.style.display = 'none';
+            if (valLabel) {
+                if (col === 'stop_via') valLabel.textContent = 'Haltestelle (Zwischenhalt / Via):';
+                else if (col === 'any_stop_via') valLabel.textContent = 'Haltestelle (Start, Ziel oder Via):';
+                else if (col === 'any_stop') valLabel.textContent = 'Haltestelle (Start oder Ziel):';
+                else if (col.startsWith('origin.')) valLabel.textContent = 'Starthaltestelle suchen oder eintippen:';
+                else if (col.startsWith('destination.')) valLabel.textContent = 'Zielhaltestelle suchen oder eintippen:';
+                else valLabel.textContent = 'Exakter Wert (z. B. Fernverkehr, ICE 100, Braunschweig Hbf):';
+            }
+            if (!tomFilterValSelect) return;
             tomFilterValSelect.clear(true);
             tomFilterValSelect.clearOptions();
             tomFilterValSelect.load('');
@@ -2737,16 +3223,41 @@
         }
     }
 
+    function openAddFilterModal() {
+        document.getElementById('addFilterModal').classList.add('active');
+        onManualFilterColChange();
+    }
+
     function closeAddFilterModal() {
         document.getElementById('addFilterModal').classList.remove('active');
     }
 
     function applyManualFilter() {
-        const col = document.getElementById('manualFilterCol').value;
+        const selEl = document.getElementById('manualFilterCol');
+        if (!selEl) return;
+        const col = selEl.value;
+        const colText = selEl.options[selEl.selectedIndex]?.text || col;
+
+        if (col === 'delay' || col === 'arrivalDelay' || col === 'departureDelay') {
+            const opEl = document.getElementById('manualFilterOp');
+            const op = opEl ? opEl.value : '>=';
+            const numInput = document.getElementById('manualFilterNum');
+            const numRaw = numInput ? numInput.value.trim() : '';
+            if (numRaw === '' || isNaN(Number(numRaw))) {
+                alert('Bitte eine gültige Zahl für die Verspätung in Minuten eingeben.');
+                if (numInput) numInput.focus();
+                return;
+            }
+            const numVal = parseInt(numRaw, 10);
+            pushDrillHistory();
+            addOrUpdateFilter(col, numVal, `${colText} ${op} ${numVal} min`, op);
+            closeAddFilterModal();
+            reloadCurrentModule();
+            return;
+        }
+
         const val = tomFilterValSelect ? String(tomFilterValSelect.getValue() || '').trim() : '';
         if (!val) return;
-        const selEl = document.getElementById('manualFilterCol');
-        const colText = selEl.options[selEl.selectedIndex].text;
         pushDrillHistory();
         addOrUpdateFilter(col, val, `${colText}: ${val}`);
         closeAddFilterModal();
@@ -2793,24 +3304,22 @@
     function triggerDbSync() {
         const btn = document.getElementById('syncBtn');
         const bannerBtn = document.getElementById('bannerSyncBtn');
-        const logBar = document.getElementById('syncStatusBar');
         if (btn) btn.disabled = true;
         if (bannerBtn) {
             bannerBtn.disabled = true;
             bannerBtn.textContent = '⏳ Lade Daten...';
         }
-        logBar.style.display = 'block';
-        logBar.textContent = '🚀 Starte Datenbank-Synchronisation mit Träwelling...';
 
         const fd = new FormData();
         getSelectedUsers().forEach(u => fd.append('users', u));
         fd.append('update_db', 'on');
+        fd.append('source', 'interactive');
 
         fetch('/start_generation', { method: 'POST', body: fd })
         .then(r => r.json())
         .then(d => {
             if (!d.task_id) {
-                logBar.textContent = '❌ Fehler beim Starten des Syncs.';
+                alert('❌ Fehler beim Starten des Syncs: ' + (d.error || 'Unbekannt'));
                 if (btn) btn.disabled = false;
                 if (bannerBtn) {
                     bannerBtn.disabled = false;
@@ -2818,25 +3327,31 @@
                 }
                 return;
             }
-            const iv = setInterval(() => {
-                fetch('/task_status/' + d.task_id)
-                .then(r => r.json())
-                .then(st => {
-                    if (st.logs && st.logs.length > 0) {
-                        logBar.textContent = st.logs[st.logs.length - 1];
+
+            if (window.startGlobalSyncWidget) {
+                window.startGlobalSyncWidget(d.task_id, function(finalStatus) {
+                    if (btn) btn.disabled = false;
+                    if (bannerBtn) {
+                        bannerBtn.disabled = false;
+                        bannerBtn.textContent = '🔄 Daten jetzt laden';
                     }
-                    if (st.status === 'completed' || st.status === 'error' || st.status === 'stopped') {
-                        clearInterval(iv);
-                        if (btn) btn.disabled = false;
-                        if (bannerBtn) {
-                            bannerBtn.disabled = false;
-                            bannerBtn.textContent = '🔄 Daten jetzt laden';
-                        }
-                        setTimeout(() => { logBar.style.display = 'none'; }, 4000);
-                        reloadCurrentModule();
-                    }
+                    reloadCurrentModule();
                 });
-            }, 1000);
+            }
+        })
+        .catch(err => {
+            alert('Netzwerkfehler: ' + err);
+            if (btn) btn.disabled = false;
+            if (bannerBtn) {
+                bannerBtn.disabled = false;
+                bannerBtn.textContent = '🔄 Daten jetzt laden';
+            }
+        });
+    }
+
+    if (window.onGlobalSyncCompleted) {
+        window.onGlobalSyncCompleted(function() {
+            reloadCurrentModule();
         });
     }
 
