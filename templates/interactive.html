@@ -634,9 +634,6 @@
         </div>
     </div>
 
-    <!-- Live Sync Widget -->
-    {% include 'sync_widget.html' %}
-
     <!-- Hinweis-Banner bei 0 Fahrten ohne aktive Filter -->
     <div id="noUserDataBanner" style="display: none; background: #fff8e1; border: 1px solid #ffe082; border-left: 5px solid #ff9800; border-radius: 8px; padding: 12px 16px; margin-bottom: 14px; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
         <div style="font-size: 13.5px; color: #b78103; font-weight: 500; display: flex; align-items: center; gap: 8px;">
@@ -1008,6 +1005,9 @@
         </div>
     </div>
 
+    <!-- Live Sync Widget -->
+    {% include 'sync_widget.html' %}
+
 </div>
 
 <!-- Backdrop für Mobile Fixieren-Menü -->
@@ -1164,8 +1164,8 @@
             maxItems: 1,
             create: true,
             valueField: 'value',
-            labelField: 'value',
-            searchField: ['value'],
+            labelField: 'label',
+            searchField: ['label', 'value'],
             placeholder: 'Tippen zum Suchen (z. B. Michelfelder, ICE, Fernverkehr)...',
             loadThrottle: 200,
             shouldLoad: function(query) { return true; },
@@ -1177,7 +1177,11 @@
                     const countBadge = item.count
                         ? `<span style="float:right; background:#eef5fa; color:#004488; font-size:11px; padding:1px 7px; border-radius:10px; font-weight:bold;">${item.count}×</span>`
                         : '';
-                    return `<div style="padding:6px 10px;"><span>${escape(item.value)}</span>${countBadge}</div>`;
+                    const disp = item.label || item.value;
+                    return `<div style="padding:6px 10px;"><span>${escape(disp)}</span>${countBadge}</div>`;
+                },
+                item: function(item, escape) {
+                    return `<div>${escape(item.label || item.value)}</div>`;
                 },
                 option_create: function(data, escape) {
                     return `<div class="create" style="padding:6px 10px;">Exakten Wert übernehmen: <strong>${escape(data.input)}</strong></div>`;
@@ -2091,8 +2095,47 @@
         updatePinMenuUI();
     }
 
+    function getTemporalKeyColumn(groupingType, row) {
+        const candidates = {
+            'time_of_day': ['Zeitfenster', 'Tageszeit', 'Bucket'],
+            'weekday': ['Wochentag'],
+            'month': ['Monat'],
+            'month_year': ['Monat (JJJJ-MM)', 'Monat/Jahr'],
+            'date': ['Tag', 'Datum', 'Kalendertag'],
+            'year': ['Jahr']
+        };
+        const list = candidates[groupingType] || [];
+        for (const c of list) {
+            if (row && row[c] !== undefined && row[c] !== null && row[c] !== '') return c;
+        }
+        if (lastQueryResult && lastQueryResult.columns && lastQueryResult.columns.length > 0) {
+            for (const c of lastQueryResult.columns) {
+                if (list.includes(c)) return c;
+            }
+            return lastQueryResult.columns[0];
+        }
+        return 'Monat (JJJJ-MM)';
+    }
+
     function formatInteractiveCell(stype, colName, dispVal, row, groupArgs, groupLabels, cIdx) {
         if (dispVal === '') return '';
+
+        // Lesbare Aufbereitung für technische Codes (Sichtbarkeit, Echtzeit-Flags)
+        let cellText = dispVal;
+        if (colName === 'Sichtbarkeit') {
+            const visLabels = {
+                '0': '🌐 Öffentlich',
+                '1': '🔒 Nicht gelistet',
+                '2': '👥 Nur Follower',
+                '3': '🔐 Privat',
+                '4': '👤 Angemeldete Nutzer',
+                '5': '⭐ Enge Freunde'
+            };
+            if (visLabels[dispVal]) cellText = visLabels[dispVal];
+        } else if (colName === 'Echtzeit verfügbar' || colName === 'Echtzeit (Anbieter)') {
+            if (dispVal === '1' || dispVal === 'true' || dispVal === 'True') cellText = '✅ Ja';
+            else if (dispVal === '0' || dispVal === 'false' || dispVal === 'False') cellText = '❌ Nein';
+        }
 
         const hyperlinkMatch = dispVal.match(/^=HYPERLINK\("([^"]+)",\s*"([^"]+)"\)$/i);
         if (hyperlinkMatch) {
@@ -2149,14 +2192,30 @@
         if ((stype === 'grouped' || stype === 'shared_grouped') && groupLabels.includes(colName)) {
             const rowFilters = extractRowGroupFilters(row, groupArgs, groupLabels);
             const encFilters = encodeURIComponent(JSON.stringify(rowFilters));
-            return `<span class="group-cell-btn" onclick="openDrillPopover(event, '${encFilters}', '${escapeHtml(dispVal)}')" title="Klicken für Drill-Down-Optionen zu '${escapeHtml(dispVal)}'">🔍 ${escapeHtml(dispVal)} ▾</span>`;
+            return `<span class="group-cell-btn" onclick="openDrillPopover(event, '${encFilters}', '${escapeHtml(cellText)}')" title="Klicken für Drill-Down-Optionen zu '${escapeHtml(cellText)}'">🔍 ${escapeHtml(cellText)} ▾</span>`;
+        }
+
+        // Badges für Sichtbarkeit & Echtzeit anzeigen, wenn es keine Gruppierungs-Spalte ist
+        if (colName === 'Sichtbarkeit' && cellText !== dispVal) {
+            return `<span class="badge-mini" style="font-size:12px; font-weight:600;">${escapeHtml(cellText)}</span>`;
+        }
+        if ((colName === 'Echtzeit verfügbar' || colName === 'Echtzeit (Anbieter)') && cellText !== dispVal) {
+            return cellText.startsWith('✅')
+                ? `<span style="color:var(--success); font-weight:bold;">${escapeHtml(cellText)}</span>`
+                : `<span style="color:#888;">${escapeHtml(cellText)}</span>`;
         }
 
         // 3. Gruppierte & Zeitliche Tabellen: Klickbare Metrik-Zahlen (Betreiber, Linien, Fahrten, Tage, Haltestellen)
         if (stype === 'grouped' || stype === 'shared_grouped' || stype === 'temporal') {
-            const rowFilters = stype === 'temporal'
-                ? [{ col: `temporal_${currentSheetConfig.grouping_type || 'weekday'}`, val: row[Object.keys(row)[0]], label: `${Object.keys(row)[0]}: ${row[Object.keys(row)[0]]}` }]
-                : extractRowGroupFilters(row, groupArgs, groupLabels);
+            let rowFilters;
+            if (stype === 'temporal') {
+                const gType = currentSheetConfig.grouping_type || 'weekday';
+                const keyCol = getTemporalKeyColumn(gType, row);
+                const keyVal = row[keyCol];
+                rowFilters = [{ col: `temporal_${gType}`, val: keyVal, label: `${keyCol}: ${keyVal}` }];
+            } else {
+                rowFilters = extractRowGroupFilters(row, groupArgs, groupLabels);
+            }
 
             // Wenn in Shared-Grouped ein User in der Zeile steht, diesen ebenfalls mitgeben
             if (stype === 'shared_grouped' && row['User']) {
@@ -2196,19 +2255,22 @@
             }
         }
 
-        // 4. Zeitliche Tabellen: Erste Spalte (Zeitfenster / Wochentag / Monat / Jahr)
-        if (stype === 'temporal' && cIdx === 0) {
+        // 4. Zeitliche Tabellen: Gruppierungs-Spalte (Zeitfenster / Wochentag / Monat / Jahr)
+        if (stype === 'temporal') {
             const gType = currentSheetConfig.grouping_type || 'weekday';
-            const rowFilters = [{ col: `temporal_${gType}`, val: dispVal, label: `${colName}: ${dispVal}` }];
-            const encFilters = encodeURIComponent(JSON.stringify(rowFilters));
-            return `<span class="group-cell-btn" onclick="openDrillPopover(event, '${encFilters}', '${escapeHtml(dispVal)}')">🕒 ${escapeHtml(dispVal)} ▾</span>`;
+            const keyCol = getTemporalKeyColumn(gType, row);
+            if (colName === keyCol) {
+                const rowFilters = [{ col: `temporal_${gType}`, val: dispVal, label: `${colName}: ${dispVal}` }];
+                const encFilters = encodeURIComponent(JSON.stringify(rowFilters));
+                return `<span class="group-cell-btn" onclick="openDrillPopover(event, '${encFilters}', '${escapeHtml(dispVal)}')">🕒 ${escapeHtml(dispVal)} ▾</span>`;
+            }
         }
 
         // 5. Haltestellen-Tabellen (ohne & mit Via)
         if (stype === 'stops' || stype === 'stops_via' || stype === 'shared_stops') {
-            const stopCol = Object.keys(row).find(k => k.startsWith('Haltestelle'));
+            const stopCol = (lastQueryResult?.columns || []).find(k => k.startsWith('Haltestelle')) || Object.keys(row).find(k => k.startsWith('Haltestelle')) || 'Haltestelle';
             const stopName = row[stopCol];
-            if (stopName && colName.startsWith('Haltestelle')) {
+            if (stopName && colName === stopCol) {
                 const colKey = stype === 'stops_via' ? 'any_stop_via' : 'any_stop';
                 const rowFilters = [{ col: colKey, val: stopName, label: `Hst.: ${stopName}` }];
                 const encFilters = encodeURIComponent(JSON.stringify(rowFilters));
@@ -2234,7 +2296,7 @@
         // 6. Geografie-Tabellen (Länder, Städte, Bundesländer, Kreise)
         if (stype === 'geo') {
             const geoKey = currentSheetConfig.geo_column || 'countryName';
-            const firstCol = Object.keys(row).find(k => k !== 'Platz' && k !== 'Besuche');
+            const firstCol = (lastQueryResult?.columns || []).find(k => k !== 'Platz' && k !== 'Besuche') || Object.keys(row).find(k => k !== 'Platz' && k !== 'Besuche');
             const placeName = row[firstCol];
             if (placeName && colName === firstCol) {
                 const rowFilters = [{ col: `geo_${geoKey}`, val: placeName, label: `${geoColumns[geoKey] || geoKey}: ${placeName}` }];
@@ -2281,12 +2343,25 @@
 
     function extractRowGroupFilters(row, groupArgs, groupLabels) {
         const filters = [];
+        const visLabels = {
+            '0': '🌐 Öffentlich',
+            '1': '🔒 Nicht gelistet',
+            '2': '👥 Nur Follower',
+            '3': '🔐 Privat',
+            '4': '👤 Angemeldete Nutzer',
+            '5': '⭐ Enge Freunde'
+        };
         for (let i = 0; i < groupArgs.length; i++) {
             const argKey = groupArgs[i];
             const lbl = groupLabels[i] || argKey;
             const val = row[lbl];
             if (val !== undefined && val !== '') {
-                filters.push({ col: argKey, val: val, label: `${lbl}: ${val}` });
+                let disp = val;
+                if (argKey === 'visibility' && visLabels[val]) disp = visLabels[val];
+                else if (argKey === 'realtimeAvailability' || argKey === 'realtimeFromDataprovider') {
+                    disp = (val === '1' || val === 1 || val === 'true') ? '✅ Ja' : '❌ Nein';
+                }
+                filters.push({ col: argKey, val: val, label: `${lbl}: ${disp}` });
             }
         }
         return filters;
@@ -3258,8 +3333,10 @@
 
         const val = tomFilterValSelect ? String(tomFilterValSelect.getValue() || '').trim() : '';
         if (!val) return;
+        const opt = tomFilterValSelect ? tomFilterValSelect.options[val] : null;
+        const dispVal = (opt && opt.label) ? opt.label : val;
         pushDrillHistory();
-        addOrUpdateFilter(col, val, `${colText}: ${val}`);
+        addOrUpdateFilter(col, val, `${colText}: ${dispVal}`);
         closeAddFilterModal();
         reloadCurrentModule();
     }

@@ -8,8 +8,11 @@ import threading
 import json
 import math
 import shutil
+import hashlib
+import urllib.parse
+from pathlib import Path
 from datetime import datetime, timedelta
-from flask import Flask, request, session, redirect, url_for, render_template, send_from_directory, abort, jsonify, render_template_string
+from flask import Flask, request, session, redirect, url_for, render_template, send_from_directory, abort, jsonify, render_template_string, make_response
 import traewelling_analysis as ta
 
 import secrets
@@ -145,10 +148,18 @@ TASKS = {}
 WAITING_QUEUE = []
 queue_lock = threading.Lock()
 generation_lock = threading.Lock()
+USER_DOWNLOAD_LOCKS = {}
+user_locks_mutex = threading.Lock()
 
-class StopTaskException(Exception):
-    """Spezifische Exception um einen laufenden Thread sicher abzubrechen, ohne die DB zu zerstören."""
-    pass
+def get_user_download_lock(username: str) -> threading.Lock:
+    """Gibt ein nutzerspezifisches Lock zurück, damit Downloads und Syncs desselben Nutzers serialisiert werden,
+    während andere Nutzer parallel arbeiten können."""
+    with user_locks_mutex:
+        if username not in USER_DOWNLOAD_LOCKS:
+            USER_DOWNLOAD_LOCKS[username] = threading.Lock()
+        return USER_DOWNLOAD_LOCKS[username]
+
+StopTaskException = ta.StopTaskException
 
 def cleanup_old_files():
     """Löscht alle Exporte in ALLEN Ordnern, die älter als 24 Stunden sind."""
@@ -164,17 +175,6 @@ def cleanup_old_files():
             except OSError:
                 pass
 
-def move_to_user_dir(creator_username, filename, folder_type):
-    """Verschiebt generierte Dateien in den privaten Ordner des Erstellers."""
-    src = os.path.join(os.getcwd(), 'finished_exports', folder_type, filename)
-    dest_dir = os.path.join(os.getcwd(), 'finished_exports', creator_username, folder_type)
-    
-    if os.path.exists(src):
-        os.makedirs(dest_dir, exist_ok=True)
-        dest = os.path.join(dest_dir, filename)
-        if os.path.exists(dest):
-            os.remove(dest) # Überschreiben
-        shutil.move(src, dest)
 
 # ==========================================
 # HINTERGRUND-WORKER
@@ -216,6 +216,17 @@ def run_generation_task(task_id, creator, api_token, selected_users, start_date,
                 "group_name": group_name
             })
 
+    user_lock = get_user_download_lock(creator)
+
+    # Warten, falls für denselben Nutzer noch ein Download läuft
+    while not user_lock.acquire(blocking=False):
+        if TASKS[task_id].get('stop_requested', False):
+            TASKS[task_id]['status'] = 'stopped'
+            TASKS[task_id]['logs'].append("⚠️ Auswertung gestoppt.")
+            return
+        log(f"⏳ Warte auf Abschluss des vorherigen Downloads für @{creator}...", replace=True)
+        time.sleep(0.5)
+
     with queue_lock:
         WAITING_QUEUE.append(task_id)
 
@@ -229,6 +240,7 @@ def run_generation_task(task_id, creator, api_token, selected_users, start_date,
         if TASKS[task_id].get('stop_requested', False):
             with queue_lock:
                 if task_id in WAITING_QUEUE: WAITING_QUEUE.remove(task_id)
+            user_lock.release()
             TASKS[task_id]['status'] = 'stopped'
             TASKS[task_id]['logs'].append("⚠️ Auswertung in der Warteschlange gestoppt.")
             return
@@ -240,12 +252,16 @@ def run_generation_task(task_id, creator, api_token, selected_users, start_date,
         try:
             log('🚀 Freie Server-Kapazitäten erhalten! Starte Initialisierung...')
             conn = ta.init_db()
+            api_token = ta.get_valid_access_token(conn, creator, min_validity_sec=1800) or api_token
 
-            ta.AUTH_USER = creator
+            trusted_users = ta.fetch_paginated_users(api_token, 'https://traewelling.de/api/v1/user/self/trusted-by')
+            followed_users = ta.fetch_paginated_users(api_token, 'https://traewelling.de/api/v1/user/self/followings')
+            followers_users = ta.fetch_paginated_users(api_token, 'https://traewelling.de/api/v1/user/self/followers')
+            ta.set_auth_user(creator)
+            ta.set_trusted_users(trusted_users)
+            ta.set_followed_users(followed_users)
+            ta.set_followers_users(followers_users)
             user_excel_settings = ta.get_user_excel_settings(conn, creator)
-            ta.TRUSTED_USERS = ta.fetch_paginated_users(api_token, 'https://traewelling.de/api/v1/user/self/trusted-by')
-            ta.FOLLOWED_USERS = ta.fetch_paginated_users(api_token, 'https://traewelling.de/api/v1/user/self/followings')
-            ta.FOLLOWERS_USERS = ta.fetch_paginated_users(api_token, 'https://traewelling.de/api/v1/user/self/followers')
 
             total = len(selected_users)
 
@@ -301,18 +317,32 @@ def run_generation_task(task_id, creator, api_token, selected_users, start_date,
                             'eta_sample_count': p.get('eta_sample_count', 0)
                         }
 
+                    def on_new_snippets(new_snippets):
+                        if task_id not in TASKS:
+                            return
+                        existing_list = TASKS[task_id].setdefault('status_snippets', [])
+                        existing_ids = {s.get('statusId') for s in existing_list}
+                        for snip in new_snippets:
+                            sid = snip.get('statusId')
+                            if sid and sid not in existing_ids:
+                                if len(existing_list) < 500:
+                                    existing_ids.add(sid)
+                                    existing_list.append(snip)
+                                else:
+                                    break
+
                     ta.fetch_data_to_db(user, conn=conn, api_token=api_token, reload_all=False,
                                         log_callback=log, update_db=options.get('update_db', True),
-                                        progress_callback=on_user_progress)
+                                        progress_callback=on_user_progress,
+                                        on_statuses_callback=on_new_snippets)
 
                     if ta.check_for_user_journeys(conn, user, start_date=start_date, end_date=end_date):
 
                         if options['gen_excel']:
                             check_stop()
                             log(f'Erstelle Excel-Fahrtenbuch für {user}...')
-                            excel_filename = ta.create_user_excel_file(conn, user, start_date=start_date, end_date=end_date, create_picture=options['gen_time'], custom_settings=user_excel_settings)
+                            excel_filename = ta.create_user_excel_file(conn, user, start_date=start_date, end_date=end_date, create_picture=options['gen_time'], custom_settings=user_excel_settings, creator_username=creator)
                             check_stop()
-                            move_to_user_dir(creator, excel_filename, "user")
                             add_live_file(excel_filename, "user")
                             log(f'   📄 {excel_filename} steht jetzt zum Download bereit!')
 
@@ -320,49 +350,44 @@ def run_generation_task(task_id, creator, api_token, selected_users, start_date,
                             check_stop()
                             log(f'Erstelle Tageszeiten-Grafiken für {user}...')
                             for grouping in ['time_of_day', 'weekday', 'month', 'month_year', 'date', 'year']:
-                                img_filename = ta.create_ganglinie_plot(username=user, grouping_type=grouping, conn=conn, start_date=start_date, end_date=end_date)
+                                img_filename = ta.create_ganglinie_plot(username=user, grouping_type=grouping, conn=conn, start_date=start_date, end_date=end_date, creator_username=creator)
                                 if img_filename:
                                     check_stop()
-                                    move_to_user_dir(creator, img_filename, "gang_linien")
                                     add_live_file(img_filename, "gang_linien")
 
                         if options['gen_map'] and len(selected_users) == 1:
                             check_stop()
                             log(f'Erstelle interaktive Streckenkarte für {user}...')
-                            map_filename = ta.create_polyline(conn, api_token, usernames=[user], start_date=start_date, end_date=end_date, log_callback=log, lite_version=options['gen_map_lite'])
+                            map_filename = ta.create_polyline(conn, api_token, usernames=[user], start_date=start_date, end_date=end_date, log_callback=log, lite_version=options['gen_map_lite'], creator_username=creator)
                             if map_filename:
                                 check_stop()
-                                move_to_user_dir(creator, map_filename, "polylines")
                                 add_live_file(map_filename, "polylines")
                                 log(f'   🗺️ {map_filename} steht jetzt zur Ansicht bereit!')
                                 
                         if options['gen_stop_map'] and len(selected_users) == 1:
                             check_stop()
                             log(f'Erstelle interaktive Haltestellenkarte für {user}...')
-                            stop_map_filename = ta.create_stops_map(conn, usernames=[user], start_date=start_date, end_date=end_date, log_callback=log, lite_version=options['gen_stop_map_lite'])
+                            stop_map_filename = ta.create_stops_map(conn, usernames=[user], start_date=start_date, end_date=end_date, log_callback=log, lite_version=options['gen_stop_map_lite'], creator_username=creator)
                             if stop_map_filename:
                                 check_stop()
-                                move_to_user_dir(creator, stop_map_filename, "polylines")
                                 add_live_file(stop_map_filename, "polylines")
                                 log(f'   📍 {stop_map_filename} steht jetzt zur Ansicht bereit!')
 
                         if options.get('gen_timeline') and len(selected_users) == 1:
                             check_stop()
                             log(f'Erstelle interaktive Timeline für {user}...')
-                            timeline_filename = ta.create_timeline(conn, usernames=[user], start_date=start_date, end_date=end_date, log_callback=log)
+                            timeline_filename = ta.create_timeline(conn, usernames=[user], start_date=start_date, end_date=end_date, log_callback=log, creator_username=creator)
                             if timeline_filename:
                                 check_stop()
-                                move_to_user_dir(creator, timeline_filename, "timelines")
                                 add_live_file(timeline_filename, "timelines")
                                 log(f'   ⏱️ {timeline_filename} steht jetzt zur Ansicht bereit!')
 
                         if options['gen_delay']:
                             check_stop()
                             log(f'Erstelle Verspätungs-Graphen für {user}...')
-                            delay_filenames = ta.create_verspaetungs_verteilungen_plot(user, conn=conn, start_date=start_date, end_date=end_date)
+                            delay_filenames = ta.create_verspaetungs_verteilungen_plot(user, conn=conn, start_date=start_date, end_date=end_date, creator_username=creator)
                             for d_file in (delay_filenames or []):
                                 check_stop()
-                                move_to_user_dir(creator, d_file, "verspaetungs_plots")
                                 add_live_file(d_file, "verspaetungs_plots")
                     else:
                         log(f'⚠️ Keine passenden Fahrten für {user} im angegebenen Zeitraum gefunden.')
@@ -375,40 +400,36 @@ def run_generation_task(task_id, creator, api_token, selected_users, start_date,
                 if options.get('gen_shared_excel'):
                     check_stop()
                     log('Erstelle gemeinsames Excel-Dashboard...')
-                    shared_excel = ta.create_shared_excel_file(conn=conn, usernames=selected_users, start_date=start_date, end_date=end_date, custom_settings=user_excel_settings)
+                    shared_excel = ta.create_shared_excel_file(conn=conn, usernames=selected_users, start_date=start_date, end_date=end_date, custom_settings=user_excel_settings, creator_username=creator)
                     if shared_excel:
                         check_stop()
-                        move_to_user_dir(creator, shared_excel, "shared")
                         add_live_file(shared_excel, "shared")
                         log(f'   📊 {shared_excel} steht jetzt zum Download bereit!')
 
                 if options['gen_map']:
                     check_stop()
                     log('Erstelle gemeinsame interaktive Streckenkarte...')
-                    shared_map = ta.create_polyline(conn, api_token, usernames=selected_users, start_date=start_date, end_date=end_date, log_callback=log, lite_version=options['gen_map_lite'])
+                    shared_map = ta.create_polyline(conn, api_token, usernames=selected_users, start_date=start_date, end_date=end_date, log_callback=log, lite_version=options['gen_map_lite'], creator_username=creator)
                     if shared_map:
                         check_stop()
-                        move_to_user_dir(creator, shared_map, "polylines")
                         add_live_file(shared_map, "polylines")
                         log(f'   🗺️ {shared_map} steht jetzt zur Ansicht bereit!')
                         
                 if options['gen_stop_map']:
                     check_stop()
                     log('Erstelle gemeinsame interaktive Haltestellenkarte...')
-                    shared_stop_map = ta.create_stops_map(conn, usernames=selected_users, start_date=start_date, end_date=end_date, log_callback=log, lite_version=options['gen_stop_map_lite'])
+                    shared_stop_map = ta.create_stops_map(conn, usernames=selected_users, start_date=start_date, end_date=end_date, log_callback=log, lite_version=options['gen_stop_map_lite'], creator_username=creator)
                     if shared_stop_map:
                         check_stop()
-                        move_to_user_dir(creator, shared_stop_map, "polylines")
                         add_live_file(shared_stop_map, "polylines")
                         log(f'   📍 {shared_stop_map} steht jetzt zur Ansicht bereit!')
 
                 if options.get('gen_timeline'):
                     check_stop()
                     log('Erstelle gemeinsame interaktive Timeline...')
-                    timeline_filename = ta.create_timeline(conn, usernames=selected_users, start_date=start_date, end_date=end_date, log_callback=log)
+                    timeline_filename = ta.create_timeline(conn, usernames=selected_users, start_date=start_date, end_date=end_date, log_callback=log, creator_username=creator)
                     if timeline_filename:
                         check_stop()
-                        move_to_user_dir(creator, timeline_filename, "timelines")
                         add_live_file(timeline_filename, "timelines")
                         log(f'   ⏱️ {timeline_filename} steht jetzt zur Ansicht bereit!')
 
@@ -436,9 +457,12 @@ def run_generation_task(task_id, creator, api_token, selected_users, start_date,
             log(f'\n❌ KRITISCHER FEHLER: {str(e)}\n{tb_str.splitlines()[-3] if len(tb_str.splitlines()) >= 3 else ""}', ignore_stop=True)
             TASKS[task_id]['status'] = 'error'
         finally:
+            ta.clear_user_context()
             with queue_lock:
                 if task_id in WAITING_QUEUE:
                     WAITING_QUEUE.remove(task_id)
+            user_lock.release()
+
 
 def run_debug_task(task_id, username, fix_type):
     """Hintergrund-Task für automatische Reparaturen im Debug-Modus."""
@@ -450,17 +474,9 @@ def run_debug_task(task_id, username, fix_type):
     try:
         conn = ta.init_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT access_token FROM user_login_data WHERE owner=?", (username,))
-        row = cursor.fetchone()
-        if not row:
-            log("❌ Kein Benutzerkonto in user_login_data gefunden.")
-            if task_id in TASKS:
-                TASKS[task_id]['status'] = 'error'
-            return
-
-        api_token = row[0] if isinstance(row, tuple) else row['access_token']
+        api_token = ta.get_valid_access_token(conn, username)
         if not api_token:
-            log("❌ Kein API-Token für Benutzer vorhanden.")
+            log("❌ Kein Benutzerkonto oder gültiger API-Token in user_login_data gefunden.")
             if task_id in TASKS:
                 TASKS[task_id]['status'] = 'error'
             return
@@ -635,10 +651,12 @@ def login_token():
     conn = ta.init_db()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO user_login_data (owner, access_token, followed_users, trusted_users, followers, last_updated, last_online) 
-        VALUES (?, ?, ?, ?, ?, ?, ?) 
+        INSERT INTO user_login_data (owner, access_token, refresh_token, expires_at, followed_users, trusted_users, followers, last_updated, last_online) 
+        VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?) 
         ON CONFLICT(owner) DO UPDATE SET 
             access_token = excluded.access_token,
+            refresh_token = NULL,
+            expires_at = NULL,
             followed_users = excluded.followed_users,
             trusted_users = excluded.trusted_users,
             followers = excluded.followers,
@@ -672,6 +690,9 @@ def callback():
 
     token_json = resp.json()
     access_token = token_json.get('access_token')
+    refresh_token = token_json.get('refresh_token')
+    expires_in = token_json.get('expires_in')
+    expires_at = (time.time() + float(expires_in)) if expires_in else None
     
     user_resp = requests.get(
         'https://traewelling.de/api/v1/auth/user', 
@@ -696,10 +717,12 @@ def callback():
     
     now_iso = datetime.now().isoformat()
     cursor.execute("""
-        INSERT INTO user_login_data (owner, access_token, followed_users, trusted_users, followers, last_updated, last_online) 
-        VALUES (?, ?, ?, ?, ?, ?, ?) 
+        INSERT INTO user_login_data (owner, access_token, refresh_token, expires_at, followed_users, trusted_users, followers, last_updated, last_online) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) 
         ON CONFLICT(owner) DO UPDATE SET 
             access_token = excluded.access_token,
+            refresh_token = excluded.refresh_token,
+            expires_at = excluded.expires_at,
             followed_users = excluded.followed_users,
             trusted_users = excluded.trusted_users,
             followers = excluded.followers,
@@ -708,6 +731,8 @@ def callback():
     """, (
         username, 
         access_token, 
+        refresh_token,
+        expires_at,
         json.dumps(list(followed)), 
         json.dumps(list(trusted)), 
         json.dumps(list(followers)),
@@ -836,10 +861,10 @@ def start_generation():
     }
 
     conn = ta.init_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT access_token FROM user_login_data WHERE owner=?", (username,))
-    row = cursor.fetchone()
-    if not row or not row[0]: return jsonify({'error': 'Kein Token'}), 401
+    api_token = ta.get_valid_access_token(conn, username, min_validity_sec=1800)
+    conn.close()
+    if not api_token:
+        return jsonify({'error': 'Kein Token'}), 401
     
     task_id = str(uuid.uuid4())
     source = request.form.get('source', 'dashboard')
@@ -847,6 +872,7 @@ def start_generation():
         'status': 'running', 
         'logs': ['Prozess in Warteschlange eingereiht...'],
         'new_files': [],
+        'status_snippets': [],
         'stop_requested': False,
         'creator': username,
         'type': 'Auswertung',
@@ -874,7 +900,7 @@ def start_generation():
         }
     }
 
-    thread = threading.Thread(target=run_generation_task, args=(task_id, username, row[0], selected_users, start_date, end_date, options))
+    thread = threading.Thread(target=run_generation_task, args=(task_id, username, api_token, selected_users, start_date, end_date, options))
     thread.daemon = True
     thread.start()
 
@@ -942,6 +968,19 @@ def task_status(task_id):
     if task_id not in TASKS:
         return jsonify({'status': 'error', 'logs': ['Task nicht gefunden'], 'new_files': []})
     task_data = dict(TASKS[task_id])
+    since = request.args.get('since', type=int)
+    if since is not None and 'logs' in task_data:
+        task_data['logs'] = task_data['logs'][since:]
+        task_data['log_offset'] = since
+
+    snippet_offset = request.args.get('snippet_offset', type=int)
+    snippets = task_data.pop('status_snippets', [])
+    if snippet_offset is not None:
+        task_data['new_snippets'] = snippets[snippet_offset:]
+    else:
+        task_data['new_snippets'] = snippets
+    task_data['snippet_total'] = len(snippets)
+
     with queue_lock:
         is_in_queue = task_id in WAITING_QUEUE
         is_waiting = is_in_queue and (len(WAITING_QUEUE) > 0 and WAITING_QUEUE[0] != task_id)
@@ -970,6 +1009,7 @@ def get_active_task():
             total_waiting = max(0, len(queue_snapshot) - 1)
 
             task_copy = dict(tinfo)
+            task_copy.pop('status_snippets', None)
             task_copy['is_waiting'] = is_waiting
             task_copy['queue_pos'] = queue_pos
             task_copy['total_waiting'] = total_waiting
@@ -994,6 +1034,78 @@ def api_sync_users():
     is_admin = is_admin_user(username)
     users_overview = ta.get_users_sync_overview(conn, username, is_admin=is_admin)
     return jsonify({'users': users_overview})
+
+@app.route('/api/search_users')
+def api_search_users():
+    if 'username' not in session:
+        return jsonify({'error': 'Nicht eingeloggt'}), 401
+
+    username = session['username']
+    q = request.args.get('q', '').strip()
+    if len(q) < 2:
+        return jsonify({'users': []})
+
+    conn = ta.init_db()
+    try:
+        api_token = ta.get_valid_access_token(conn, username)
+        if not api_token:
+            return jsonify({'error': 'Kein gültiges API-Token', 'users': []}), 401
+
+        encoded_q = urllib.parse.quote(q, safe='')
+        url = f'https://traewelling.de/api/v1/user/search/{encoded_q}'
+        resp, _ = ta.traewelling_api_get(url, api_token, conn=conn, username=username, timeout=10)
+
+        if resp.status_code == 429:
+            return jsonify({'error': 'Rate-Limit erreicht. Bitte kurz warten.', 'users': []}), 429
+        if resp.status_code != 200:
+            ta.log_error(
+                username=username,
+                error_type=f"HTTP_{resp.status_code}",
+                error_message=f"Träwelling API /user/search Fehler: {resp.text}",
+                context=f"api_search_users (q={q})",
+                conn=conn
+            )
+            return jsonify({'error': f'Träwelling-Suche nicht verfügbar (HTTP {resp.status_code}).', 'users': []}), resp.status_code
+
+        cursor = conn.cursor()
+        cursor.execute("SELECT followed_users, trusted_users, followers FROM user_login_data WHERE owner = ?", (username,))
+        row = cursor.fetchone()
+        all_friends = set()
+        if row:
+            for val in row:
+                if val:
+                    try:
+                        all_friends.update(json.loads(val))
+                    except Exception:
+                        pass
+
+        data = resp.json().get('data', [])
+        users_list = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            u_name = item.get('username') or ''
+            if not u_name:
+                continue
+            private_profile = bool(item.get('privateProfile', False))
+            is_self = (u_name == username)
+            is_friend = (u_name in all_friends) or bool(item.get('following', False))
+            likely_invisible = bool(private_profile and not is_friend and not is_self)
+            users_list.append({
+                'username': u_name,
+                'displayName': item.get('displayName') or u_name,
+                'privateProfile': private_profile,
+                'isFriend': is_friend,
+                'isSelf': is_self,
+                'likelyInvisible': likely_invisible
+            })
+
+        return jsonify({'users': users_list})
+    except Exception as e:
+        ta.log_error(username=username, error=e, context=f"api_search_users (q={q})", conn=conn)
+        return jsonify({'error': f'Fehler bei der Nutzersuche: {e}', 'users': []}), 500
+    finally:
+        conn.close()
 
 @app.route('/files/<action>/<folder>/<filename>')
 def handle_file(action, folder, filename):
@@ -1269,10 +1381,10 @@ def debug_api_check(check_type, item_id):
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
-    cursor.execute("SELECT access_token FROM user_login_data WHERE owner=?", (username,))
-    row = cursor.fetchone()
-    if not row or not row['access_token']: return jsonify({'error': 'Kein Token'}), 401
-    api_token = row['access_token']
+    api_token = ta.get_valid_access_token(conn, username)
+    if not api_token:
+        conn.close()
+        return jsonify({'error': 'Kein Token'}), 401
 
     differs = False
     diff_reasons = []
@@ -1294,6 +1406,15 @@ def debug_api_check(check_type, item_id):
                 'Authorization': f'Bearer {api_token}',
                 'User-Agent': 'TraewellingAnalysis_WebApp v10'
             })
+            if resp.status_code == 401:
+                new_token = ta.refresh_oauth_token(conn, username, force=True)
+                if new_token:
+                    api_token = new_token
+                    resp = requests.get(f'https://traewelling.de/api/v1/status/{item_id}', headers={
+                        'accept': 'application/json',
+                        'Authorization': f'Bearer {api_token}',
+                        'User-Agent': 'TraewellingAnalysis_WebApp v10'
+                    })
 
             if resp.status_code == 404:
                 return jsonify({'success': True, 'api_data': None, 'differs': True, 'diff_reasons': [
@@ -1345,6 +1466,15 @@ def debug_api_check(check_type, item_id):
                 'Authorization': f'Bearer {api_token}',
                 'User-Agent': 'TraewellingAnalysis_WebApp v10'
             })
+            if resp.status_code == 401:
+                new_token = ta.refresh_oauth_token(conn, username, force=True)
+                if new_token:
+                    api_token = new_token
+                    resp = requests.get(f'https://traewelling.de/api/v1/stations/{item_id}', headers={
+                        'accept': 'application/json',
+                        'Authorization': f'Bearer {api_token}',
+                        'User-Agent': 'TraewellingAnalysis_WebApp v10'
+                    })
             if resp.status_code == 404:
                 return jsonify({'success': True, 'api_data': None, 'differs': True, 'diff_reasons': [
                     'Haltestelle existiert in der API nicht mehr (404 Not Found) - Löschen empfohlen']})
@@ -1435,12 +1565,10 @@ def debug_reload_status():
             'message': f'Berechtigung verweigert: Fahrt #{status_id} gehört @{j_row["username"]}. Du kannst nur deine eigenen Fahrten neu berechnen.'
         }), 403
 
-    cursor.execute("SELECT access_token FROM user_login_data WHERE owner=?", (username,))
-    row = cursor.fetchone()
-    if not row or not row['access_token']:
+    api_token = ta.get_valid_access_token(conn, username)
+    if not api_token:
         conn.close()
         return jsonify({'error': 'Kein Träwelling-Token für deinen Account vorhanden.'}), 401
-    api_token = row['access_token']
 
     success, diffs = ta.reload_single_status(conn, api_token, status_id)
     conn.close()
@@ -1638,14 +1766,16 @@ def api_interactive_query():
 
     conn = ta.init_db()
     try:
-        ta.AUTH_USER = creator
         cur = conn.cursor()
         cur.execute("SELECT followed_users, trusted_users, followers FROM user_login_data WHERE owner = ?", (creator,))
         r_priv = cur.fetchone()
-        if r_priv:
-            ta.FOLLOWED_USERS = set(json.loads(r_priv[0])) if r_priv[0] else set()
-            ta.TRUSTED_USERS = set(json.loads(r_priv[1])) if r_priv[1] else set()
-            ta.FOLLOWERS_USERS = set(json.loads(r_priv[2])) if r_priv[2] else set()
+        followed = set(json.loads(r_priv[0])) if r_priv and r_priv[0] else set()
+        trusted = set(json.loads(r_priv[1])) if r_priv and r_priv[1] else set()
+        followers = set(json.loads(r_priv[2])) if r_priv and r_priv[2] else set()
+        ta.set_auth_user(creator)
+        ta.set_followed_users(followed)
+        ta.set_trusted_users(trusted)
+        ta.set_followers_users(followers)
 
         stype = sheet_cfg.get('type', 'grouped')
         use_index = bool(sheet_cfg.get('index', stype in ('stops', 'stops_via', 'geo')))
@@ -1729,6 +1859,7 @@ def api_interactive_query():
         ta.log_error(username=creator, error=e, traceback_str=tb_str, context=f"api_interactive_query (sheet_type: {stype})")
         return jsonify({'error': str(e)}), 500
     finally:
+        ta.clear_user_context()
         conn.close()
 
 
@@ -1751,14 +1882,16 @@ def api_interactive_filter_values():
 
     conn = ta.init_db()
     try:
-        ta.AUTH_USER = creator
         cur = conn.cursor()
         cur.execute("SELECT followed_users, trusted_users, followers FROM user_login_data WHERE owner = ?", (creator,))
         r_priv = cur.fetchone()
-        if r_priv:
-            ta.FOLLOWED_USERS = set(json.loads(r_priv[0])) if r_priv[0] else set()
-            ta.TRUSTED_USERS = set(json.loads(r_priv[1])) if r_priv[1] else set()
-            ta.FOLLOWERS_USERS = set(json.loads(r_priv[2])) if r_priv[2] else set()
+        followed = set(json.loads(r_priv[0])) if r_priv and r_priv[0] else set()
+        trusted = set(json.loads(r_priv[1])) if r_priv and r_priv[1] else set()
+        followers = set(json.loads(r_priv[2])) if r_priv and r_priv[2] else set()
+        ta.set_auth_user(creator)
+        ta.set_followed_users(followed)
+        ta.set_trusted_users(trusted)
+        ta.set_followers_users(followers)
 
         placeholders = ','.join(['?'] * len(users))
         base_params = list(users)
@@ -1776,7 +1909,49 @@ def api_interactive_filter_values():
         with ta.interactive_filter_context(conn, users, start_date, end_date, active_filters):
             vis_sql = ta.get_shared_visibility_query('j')
 
-            if col in ta.AVAILABLE_GROUP_COLUMNS:
+            if col == 'visibility':
+                cur.execute(f"""
+                    SELECT CAST(j.visibility AS TEXT) AS val, COUNT(*) AS cnt
+                    FROM journeys j
+                    WHERE j.username IN ({placeholders}) {date_sql} {vis_sql}
+                      AND j.visibility IS NOT NULL
+                    GROUP BY val
+                    ORDER BY cnt DESC
+                """, base_params)
+                vis_labels = {
+                    '0': '🌐 Öffentlich',
+                    '1': '🔒 Nicht gelistet',
+                    '2': '👥 Nur Follower',
+                    '3': '🔐 Privat',
+                    '4': '👤 Angemeldete Nutzer',
+                    '5': '⭐ Enge Freunde'
+                }
+                q_low = search_q.lower()
+                for r in cur.fetchall():
+                    if r[0] is not None and str(r[0]) != '':
+                        v_str = str(r[0])
+                        lbl = vis_labels.get(v_str, f"Sichtbarkeit {v_str}")
+                        if not q_low or q_low in lbl.lower() or q_low in v_str.lower():
+                            results.append({'value': v_str, 'label': lbl, 'count': r[1]})
+
+            elif col in ('realtimeAvailability', 'realtimeFromDataprovider'):
+                cur.execute(f"""
+                    SELECT CAST(j.{col} AS TEXT) AS val, COUNT(*) AS cnt
+                    FROM journeys j
+                    WHERE j.username IN ({placeholders}) {date_sql} {vis_sql}
+                      AND j.{col} IS NOT NULL
+                    GROUP BY val
+                    ORDER BY cnt DESC
+                """, base_params)
+                q_low = search_q.lower()
+                for r in cur.fetchall():
+                    if r[0] is not None and str(r[0]) != '':
+                        v_str = str(r[0])
+                        lbl = '✅ Ja' if v_str in ('1', 'True', 'true') else '❌ Nein'
+                        if not q_low or q_low in lbl.lower() or q_low in v_str.lower():
+                            results.append({'value': v_str, 'label': lbl, 'count': r[1]})
+
+            elif col in ta.AVAILABLE_GROUP_COLUMNS:
                 sql_expr = ta.AVAILABLE_GROUP_COLUMNS[col]['sql']
                 like_sql = ""
                 q_params = list(base_params)
@@ -1796,7 +1971,7 @@ def api_interactive_filter_values():
                     ORDER BY cnt DESC, val ASC
                     LIMIT 60
                 """, q_params)
-                results = [{'value': r[0], 'count': r[1]} for r in cur.fetchall() if r[0]]
+                results = [{'value': str(r[0]), 'label': str(r[0]), 'count': r[1]} for r in cur.fetchall() if r[0]]
 
             elif col == 'any_stop':
                 like_sql = ""
@@ -1822,7 +1997,7 @@ def api_interactive_filter_values():
                     ORDER BY cnt DESC, val ASC
                     LIMIT 60
                 """, q_params)
-                results = [{'value': r[0], 'count': r[1]} for r in cur.fetchall() if r[0]]
+                results = [{'value': str(r[0]), 'label': str(r[0]), 'count': r[1]} for r in cur.fetchall() if r[0]]
 
             elif col == 'any_stop_via':
                 from collections import Counter
@@ -1846,7 +2021,7 @@ def api_interactive_filter_values():
                                     stop_counter[s] += 1
                         except Exception:
                             pass
-                results = [{'value': val, 'count': cnt} for val, cnt in stop_counter.most_common(60)]
+                results = [{'value': val, 'label': val, 'count': cnt} for val, cnt in stop_counter.most_common(60)]
 
             elif col == 'stop_via':
                 from collections import Counter
@@ -1868,7 +2043,7 @@ def api_interactive_filter_values():
                                         stop_counter[s] += 1
                         except Exception:
                             pass
-                results = [{'value': val, 'count': cnt} for val, cnt in stop_counter.most_common(60)]
+                results = [{'value': val, 'label': val, 'count': cnt} for val, cnt in stop_counter.most_common(60)]
 
             elif col.startswith('geo_'):
                 g_col = col.replace('geo_', '')
@@ -1896,13 +2071,14 @@ def api_interactive_filter_values():
                         ORDER BY cnt DESC, val ASC
                         LIMIT 60
                     """, q_params)
-                    results = [{'value': r[0], 'count': r[1]} for r in cur.fetchall() if r[0]]
+                    results = [{'value': str(r[0]), 'label': str(r[0]), 'count': r[1]} for r in cur.fetchall() if r[0]]
 
         return jsonify({'values': results})
     except Exception as e:
         ta.log_error(username=creator, error=e, context="api_interactive_filter_values")
         return jsonify({'error': str(e), 'values': []}), 500
     finally:
+        ta.clear_user_context()
         conn.close()
 
 
@@ -1923,15 +2099,17 @@ def api_interactive_visual():
 
     conn = ta.init_db()
     try:
-        ta.AUTH_USER = creator
         cur = conn.cursor()
         cur.execute("SELECT access_token, followed_users, trusted_users, followers FROM user_login_data WHERE owner = ?", (creator,))
         row = cur.fetchone()
         api_token = row[0] if row else ''
-        if row:
-            ta.FOLLOWED_USERS = set(json.loads(row[1])) if row[1] else set()
-            ta.TRUSTED_USERS = set(json.loads(row[2])) if row[2] else set()
-            ta.FOLLOWERS_USERS = set(json.loads(row[3])) if row[3] else set()
+        followed = set(json.loads(row[1])) if row and row[1] else set()
+        trusted = set(json.loads(row[2])) if row and row[2] else set()
+        followers = set(json.loads(row[3])) if row and row[3] else set()
+        ta.set_auth_user(creator)
+        ta.set_followed_users(followed)
+        ta.set_trusted_users(trusted)
+        ta.set_followers_users(followers)
 
         filename = None
         folder = None
@@ -1939,25 +2117,24 @@ def api_interactive_visual():
         with ta.interactive_filter_context(conn, users, start_date, end_date, filters):
             if vtype == 'polyline':
                 folder = 'polylines'
-                filename = ta.create_polyline(conn, api_token, usernames=users, start_date=start_date, end_date=end_date, lite_version=lite)
+                filename = ta.create_polyline(conn, api_token, usernames=users, start_date=start_date, end_date=end_date, lite_version=lite, creator_username=creator)
             elif vtype == 'stops_map':
                 folder = 'polylines'
-                filename = ta.create_stops_map(conn, usernames=users, start_date=start_date, end_date=end_date, lite_version=lite)
+                filename = ta.create_stops_map(conn, usernames=users, start_date=start_date, end_date=end_date, lite_version=lite, creator_username=creator)
             elif vtype == 'timeline':
                 folder = 'timelines'
-                filename = ta.create_timeline(conn, usernames=users, start_date=start_date, end_date=end_date)
+                filename = ta.create_timeline(conn, usernames=users, start_date=start_date, end_date=end_date, creator_username=creator)
             elif vtype == 'ganglinie':
                 folder = 'gang_linien'
-                filename = ta.create_ganglinie_plot(username=users[0], grouping_type=g_type, conn=conn, start_date=start_date, end_date=end_date)
+                filename = ta.create_ganglinie_plot(username=users[0], grouping_type=g_type, conn=conn, start_date=start_date, end_date=end_date, creator_username=creator)
             elif vtype == 'delay_plot':
                 folder = 'verspaetungs_plots'
-                files = ta.create_verspaetungs_verteilungen_plot(users[0], conn=conn, start_date=start_date, end_date=end_date)
+                files = ta.create_verspaetungs_verteilungen_plot(users[0], conn=conn, start_date=start_date, end_date=end_date, creator_username=creator)
                 filename = files[0] if files else None
 
         if not filename or not folder:
             return jsonify({'error': 'Für diese Auswahl konnten keine Daten visualisiert werden.'}), 404
 
-        move_to_user_dir(creator, filename, folder)
         return jsonify({
             'filename': filename,
             'view_url': f"/files/view/{folder}/{filename}",
@@ -1967,6 +2144,7 @@ def api_interactive_visual():
         ta.log_error(username=creator, error=e, context=f"api_interactive_visual ({vtype})")
         return jsonify({'error': str(e)}), 500
     finally:
+        ta.clear_user_context()
         conn.close()
 
 
@@ -2022,15 +2200,14 @@ def api_interactive_export_table():
 
     conn = ta.init_db()
     try:
-        ta.AUTH_USER = creator
-        with ta.interactive_filter_context(conn, users, start_date, end_date, filters):
-            if mode == 'shared':
-                fname = ta.create_shared_excel_file(conn, usernames=users, start_date=start_date, end_date=end_date, custom_settings={'shared_sheets': [sheet_cfg]})
-                folder = 'shared'
-            else:
-                fname = ta.create_user_excel_file(conn, username=users[0], start_date=start_date, end_date=end_date, create_picture=False, custom_settings={'user_sheets': [sheet_cfg]})
-                folder = 'user'
-        move_to_user_dir(creator, fname, folder)
+        with ta.user_auth_context_from_db(conn, creator):
+            with ta.interactive_filter_context(conn, users, start_date, end_date, filters):
+                if mode == 'shared':
+                    fname = ta.create_shared_excel_file(conn, usernames=users, start_date=start_date, end_date=end_date, custom_settings={'shared_sheets': [sheet_cfg]}, creator_username=creator)
+                    folder = 'shared'
+                else:
+                    fname = ta.create_user_excel_file(conn, username=users[0], start_date=start_date, end_date=end_date, create_picture=False, custom_settings={'user_sheets': [sheet_cfg]}, creator_username=creator)
+                    folder = 'user'
         return jsonify({'download_url': f"/files/download/{folder}/{fname}"})
     except Exception as e:
         ta.log_error(username=creator, error=e, context=f"api_interactive_export_table ({mode})")
@@ -2508,8 +2685,8 @@ def api_ai_chat():
     if not message:
         return jsonify({'success': False, 'error': 'Keine Nachricht eingegeben.'}), 400
 
-    if message.lower() in ('koch kaffee', 'brew coffee', '/coffee', 'kaffee'):
-        err_msg = "418 I'm a teapot: Ich bin eine Bahn-Datenbank, keine Kaffeemaschine! 🫖"
+    if message.lower().rstrip('!?.') in ('koch kaffee', 'koche kaffee', 'mach kaffee', 'brew coffee', '/coffee', 'kaffee'):
+        err_msg = "418 I'm a teapot: Ich bin eine Bahn-Datenbank auf tee_beutel-Basis, keine Kaffeemaschine! 🫖"
         ta.log_error(username=username, error_type="HTTP_418", error_message=err_msg, context=f"Fast-Path Teapot ({message})")
         return jsonify({
             'success': False,

@@ -221,6 +221,58 @@
                 ⏳ Rate-Limit (HTTP 429) – Pausiere (mindestens) 30 Sekunden...
             </div>
         </div>
+
+        <!-- 4. LIVE STATUS-READER WÄHREND DES DOWNLOADS -->
+        <div id="syncStatusReaderCard" style="display: none; background: #f8fafc; border: 1px solid #d0d7de; border-radius: 8px; padding: 12px 14px; margin-top: 12px; position: relative; overflow: hidden;">
+            <!-- Header-Zeile -->
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px;">
+                <div style="display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden;">
+                    <span id="syncReaderUsername" style="font-weight: 700; color: #1f2328; font-size: 13px; white-space: nowrap;"></span>
+                    <span id="syncReaderLineBadge" style="padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 700; color: #ffffff; background: #004488; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;"></span>
+                </div>
+                <div style="flex-shrink: 0;">
+                    <span id="syncReaderDate" style="font-size: 11.5px; color: #57606a; font-weight: 500;"></span>
+                </div>
+            </div>
+
+            <!-- Strecken- & Zeiten-Zeile (kompakt, responsiv mit flex-wrap) -->
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; font-size: 12px; color: #24292f; margin-bottom: 6px;">
+                <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0;">
+                    <span id="syncReaderRoute" style="font-weight: 600; word-break: break-word;"></span>
+                    <span id="syncReaderDistance" style="background: #eef1f4; color: #495057; padding: 1px 6px; border-radius: 4px; font-size: 10.5px; font-weight: 600; display: none;"></span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                    <span id="syncReaderTimes" style="font-weight: 500; color: #57606a;"></span>
+                    <span id="syncReaderDelayBadge" style="font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; display: none;"></span>
+                </div>
+            </div>
+
+            <!-- Statustext -->
+            <div id="syncReaderBody" style="max-height: 95px; overflow-y: auto; border-left: 3px solid #004488; padding-left: 10px; margin: 8px 0; font-size: 13px; color: #1f2328; line-height: 1.45; white-space: pre-wrap; word-break: break-word;"></div>
+
+            <!-- Footer-Zeile -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 12px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span id="syncReaderLikes" style="color: #cf222e; font-size: 11.5px; font-weight: 600; display: none;"></span>
+                    <a id="syncReaderLink" href="#" target="_blank" rel="noopener" style="color: #0969da; text-decoration: none; font-size: 11.5px; font-weight: 500;">
+                        ↗ Träwelling
+                    </a>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span id="syncReaderCount" style="font-size: 11px; color: #57606a; font-weight: 600;"></span>
+                    <div style="display: inline-flex; align-items: center; gap: 4px;">
+                        <button type="button" id="syncReaderPrevBtn" onclick="prevStatusSnippet()" title="Vorheriger Status" style="background: #ffffff; border: 1px solid #d0d7de; border-radius: 4px; padding: 2px 7px; font-size: 11px; cursor: pointer; color: #24292f; line-height: 1.2;">⏮</button>
+                        <button type="button" id="syncReaderPauseBtn" onclick="toggleStatusSnippetPause()" title="Pause / Weiter" style="background: #ffffff; border: 1px solid #d0d7de; border-radius: 4px; padding: 2px 7px; font-size: 11px; cursor: pointer; color: #24292f; line-height: 1.2;">⏸</button>
+                        <button type="button" id="syncReaderNextBtn" onclick="nextStatusSnippet(true)" title="Nächster Status" style="background: #ffffff; border: 1px solid #d0d7de; border-radius: 4px; padding: 2px 7px; font-size: 11px; cursor: pointer; color: #24292f; line-height: 1.2;">⏭</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Timer-Balken -->
+            <div style="position: absolute; bottom: 0; left: 0; right: 0; height: 3px; background: #e1e4e8;">
+                <div id="syncReaderTimerBar" style="height: 100%; width: 0%; background: #004488;"></div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -228,6 +280,342 @@
     window.activeTraewellingTaskId = null;
     window.syncPollTimer = null;
     window.syncCompleteHandlers = [];
+
+    // === STATUS READER STATE & HELPERS ===
+    let snippetPool = [];
+    let snippetHistory = [];
+    let historyIndex = -1;
+    let isSnippetPaused = false;
+    let snippetTimerHandle = null;
+    let snippetElapsedMs = 0;
+    let lastTickTime = null;
+    let currentSyncUser = null;
+    const SNIPPET_DURATION_MS = 5000;
+
+    function getCategoryEmoji(cat) {
+        switch ((cat || '').toLowerCase()) {
+            case 'national':
+            case 'nationalexpress':
+                return '🚄';
+            case 'regional':
+            case 'regionalexp':
+                return '🚆';
+            case 'suburban':
+                return '🚊';
+            case 'subway':
+                return '🚇';
+            case 'tram':
+                return '🚊';
+            case 'bus':
+                return '🚌';
+            case 'ferry':
+                return '⛴️';
+            case 'plane':
+                return '✈️';
+            case 'taxi':
+                return '🚕';
+            default:
+                return '🚆';
+        }
+    }
+
+    function formatColor(c) {
+        if (!c) return '#004488';
+        const str = String(c).trim();
+        if (/^[0-9a-fA-F]{6}$/.test(str) || /^[0-9a-fA-F]{3}$/.test(str)) {
+            return '#' + str;
+        }
+        return str.startsWith('#') ? str : '#004488';
+    }
+
+    function formatIsoDate(isoStr) {
+        if (!isoStr) return '';
+        try {
+            const d = new Date(isoStr);
+            if (isNaN(d.getTime())) return '';
+            const day = String(d.getDate()).padStart(2, '0');
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const year = d.getFullYear();
+            return `${day}.${month}.${year}`;
+        } catch (e) {
+            return '';
+        }
+    }
+
+    function formatIsoTime(isoStr) {
+        if (!isoStr) return '';
+        try {
+            const d = new Date(isoStr);
+            if (isNaN(d.getTime())) return '';
+            const hours = String(d.getHours()).padStart(2, '0');
+            const mins = String(d.getMinutes()).padStart(2, '0');
+            return `${hours}:${mins}`;
+        } catch (e) {
+            return '';
+        }
+    }
+
+    function pickWeightedRandomSnippet(snippets, currentUser, lastShownId) {
+        if (!snippets || snippets.length === 0) return null;
+        if (snippets.length === 1) return snippets[0];
+
+        // Keine direkten Wiederholungen: Falls snippets.length > 1, lastShownId ausschließen
+        let candidates = snippets;
+        if (lastShownId !== null && lastShownId !== undefined) {
+            const filtered = snippets.filter(s => s.statusId !== lastShownId);
+            if (filtered.length > 0) {
+                candidates = filtered;
+            }
+        }
+
+        // Gesamtgewicht = lengthWeight * userWeight
+        const weightedCandidates = candidates.map(s => {
+            const body = (s.body || '').trim();
+            const lengthWeight = Math.pow(Math.min(Math.max(body.length, 10), 400), 1.3);
+            const userWeight = (currentUser && s.username === currentUser) ? 3.5 : 1.0;
+            return {
+                snippet: s,
+                weight: lengthWeight * userWeight
+            };
+        });
+
+        const totalWeight = weightedCandidates.reduce((sum, item) => sum + item.weight, 0);
+        if (totalWeight <= 0) {
+            return candidates[Math.floor(Math.random() * candidates.length)];
+        }
+
+        let randomVal = Math.random() * totalWeight;
+        for (const item of weightedCandidates) {
+            if (randomVal <= item.weight) {
+                return item.snippet;
+            }
+            randomVal -= item.weight;
+        }
+
+        return weightedCandidates[weightedCandidates.length - 1].snippet;
+    }
+
+    function startSnippetTicker() {
+        if (snippetTimerHandle) return;
+        lastTickTime = performance.now();
+        snippetTimerHandle = setInterval(() => {
+            const now = performance.now();
+            const delta = now - (lastTickTime || now);
+            lastTickTime = now;
+
+            if (!isSnippetPaused && historyIndex >= 0 && snippetPool.length > 0) {
+                snippetElapsedMs += delta;
+                const pct = Math.min(100, (snippetElapsedMs / SNIPPET_DURATION_MS) * 100);
+                const bar = document.getElementById('syncReaderTimerBar');
+                if (bar) bar.style.width = pct + '%';
+
+                if (snippetElapsedMs >= SNIPPET_DURATION_MS) {
+                    snippetElapsedMs = 0;
+                    if (bar) bar.style.width = '0%';
+                    nextStatusSnippet(false);
+                }
+            }
+        }, 50);
+    }
+
+    function stopSnippetTicker() {
+        if (snippetTimerHandle) {
+            clearInterval(snippetTimerHandle);
+            snippetTimerHandle = null;
+        }
+        snippetElapsedMs = 0;
+        const bar = document.getElementById('syncReaderTimerBar');
+        if (bar) bar.style.width = '0%';
+    }
+
+    function resetSnippetTimer() {
+        snippetElapsedMs = 0;
+        lastTickTime = performance.now();
+        const bar = document.getElementById('syncReaderTimerBar');
+        if (bar) bar.style.width = '0%';
+    }
+
+    function resetStatusReader() {
+        stopSnippetTicker();
+        snippetPool = [];
+        snippetHistory = [];
+        historyIndex = -1;
+        isSnippetPaused = false;
+        snippetElapsedMs = 0;
+        const readerCard = document.getElementById('syncStatusReaderCard');
+        if (readerCard) readerCard.style.display = 'none';
+        const bar = document.getElementById('syncReaderTimerBar');
+        if (bar) bar.style.width = '0%';
+        const pauseBtn = document.getElementById('syncReaderPauseBtn');
+        if (pauseBtn) {
+            pauseBtn.textContent = '⏸';
+            pauseBtn.title = 'Pause / Weiter';
+        }
+    }
+
+    function renderCurrentSnippet() {
+        if (historyIndex < 0 || historyIndex >= snippetHistory.length) return;
+        const s = snippetHistory[historyIndex];
+        if (!s) return;
+
+        // Header: @username + line badge + date
+        const uSpan = document.getElementById('syncReaderUsername');
+        if (uSpan) uSpan.textContent = `@${s.username || 'User'}`;
+
+        const lineBadge = document.getElementById('syncReaderLineBadge');
+        if (lineBadge) {
+            const emoji = getCategoryEmoji(s.category);
+            const lineText = s.lineName ? `${emoji} ${s.lineName}` : `${emoji} ${s.category || 'Fahrt'}`;
+            lineBadge.textContent = lineText;
+            lineBadge.style.background = formatColor(s.routeColor);
+        }
+
+        const dateSpan = document.getElementById('syncReaderDate');
+        if (dateSpan) {
+            dateSpan.textContent = formatIsoDate(s.departure);
+        }
+
+        // Strecken- & Zeiten-Zeile
+        const routeSpan = document.getElementById('syncReaderRoute');
+        if (routeSpan) {
+            const orig = s.origin || '?';
+            const dest = s.destination || '?';
+            routeSpan.textContent = `${orig} ➔ ${dest}`;
+        }
+
+        const distSpan = document.getElementById('syncReaderDistance');
+        if (distSpan) {
+            if (s.distance_km && s.distance_km > 0) {
+                distSpan.style.display = 'inline';
+                distSpan.textContent = `${s.distance_km} km`;
+            } else {
+                distSpan.style.display = 'none';
+            }
+        }
+
+        const timesSpan = document.getElementById('syncReaderTimes');
+        if (timesSpan) {
+            const tDep = formatIsoTime(s.departure);
+            const tArr = formatIsoTime(s.arrival);
+            if (tDep && tArr) {
+                timesSpan.textContent = `${tDep} ➔ ${tArr}`;
+            } else if (tDep) {
+                timesSpan.textContent = `Abfahrt ${tDep}`;
+            } else {
+                timesSpan.textContent = '';
+            }
+        }
+
+        const delayBadge = document.getElementById('syncReaderDelayBadge');
+        if (delayBadge) {
+            if (s.arrivalDelay !== null && s.arrivalDelay !== undefined) {
+                delayBadge.style.display = 'inline-block';
+                if (s.arrivalDelay <= 0) {
+                    delayBadge.style.background = '#dafbe1';
+                    delayBadge.style.color = '#1a7f37';
+                    delayBadge.style.border = '1px solid #4ac26b';
+                    delayBadge.textContent = (s.arrivalDelay === 0) ? 'pünktlich' : `${s.arrivalDelay} min`;
+                } else if (s.arrivalDelay >= 1 && s.arrivalDelay <= 5) {
+                    delayBadge.style.background = '#fff8c5';
+                    delayBadge.style.color = '#9a6700';
+                    delayBadge.style.border = '1px solid #d4a72c';
+                    delayBadge.textContent = `+${s.arrivalDelay} min`;
+                } else {
+                    delayBadge.style.background = '#ffebe9';
+                    delayBadge.style.color = '#cf222e';
+                    delayBadge.style.border = '1px solid #ff8182';
+                    delayBadge.textContent = `+${s.arrivalDelay} min`;
+                }
+            } else {
+                delayBadge.style.display = 'inline-block';
+                delayBadge.style.background = '#f6f8fa';
+                delayBadge.style.color = '#57606a';
+                delayBadge.style.border = '1px solid #d0d7de';
+                delayBadge.textContent = 'Plan';
+            }
+        }
+
+        // Body
+        const bodyDiv = document.getElementById('syncReaderBody');
+        if (bodyDiv) {
+            bodyDiv.textContent = s.body || '';
+        }
+
+        // Footer
+        const likesSpan = document.getElementById('syncReaderLikes');
+        if (likesSpan) {
+            if (s.likes && s.likes > 0) {
+                likesSpan.style.display = 'inline';
+                likesSpan.textContent = `❤️ ${s.likes}`;
+            } else {
+                likesSpan.style.display = 'none';
+            }
+        }
+
+        const linkA = document.getElementById('syncReaderLink');
+        if (linkA) {
+            linkA.href = `https://traewelling.de/status/${s.statusId}`;
+        }
+
+        const countSpan = document.getElementById('syncReaderCount');
+        if (countSpan) {
+            const count = snippetPool.length;
+            countSpan.textContent = `${count} Status${count === 1 ? '' : 'se'}`;
+        }
+
+        // Buttons
+        const prevBtn = document.getElementById('syncReaderPrevBtn');
+        if (prevBtn) {
+            prevBtn.disabled = (historyIndex <= 0);
+            prevBtn.style.opacity = (historyIndex <= 0) ? '0.4' : '1';
+            prevBtn.style.cursor = (historyIndex <= 0) ? 'not-allowed' : 'pointer';
+        }
+
+        const pauseBtn = document.getElementById('syncReaderPauseBtn');
+        if (pauseBtn) {
+            pauseBtn.textContent = isSnippetPaused ? '▶' : '⏸';
+            pauseBtn.title = isSnippetPaused ? 'Weiter' : 'Pause';
+        }
+    }
+
+    window.prevStatusSnippet = function() {
+        if (historyIndex > 0) {
+            historyIndex--;
+            renderCurrentSnippet();
+            resetSnippetTimer();
+        }
+    };
+
+    window.nextStatusSnippet = function(isManual) {
+        if (snippetPool.length === 0) return;
+
+        if (historyIndex < snippetHistory.length - 1) {
+            historyIndex++;
+            renderCurrentSnippet();
+        } else {
+            const currentSnippet = snippetHistory[historyIndex] || null;
+            const lastId = currentSnippet ? currentSnippet.statusId : null;
+            const picked = pickWeightedRandomSnippet(snippetPool, currentSyncUser, lastId);
+            if (picked) {
+                snippetHistory.push(picked);
+                historyIndex = snippetHistory.length - 1;
+                renderCurrentSnippet();
+            }
+        }
+        resetSnippetTimer();
+    };
+
+    window.toggleStatusSnippetPause = function() {
+        isSnippetPaused = !isSnippetPaused;
+        const pauseBtn = document.getElementById('syncReaderPauseBtn');
+        if (pauseBtn) {
+            pauseBtn.textContent = isSnippetPaused ? '▶' : '⏸';
+            pauseBtn.title = isSnippetPaused ? 'Weiter' : 'Pause';
+        }
+        if (!isSnippetPaused) {
+            lastTickTime = performance.now();
+        }
+    };
 
     window.onGlobalSyncCompleted = function(callback) {
         if (typeof callback === 'function') {
@@ -245,6 +633,8 @@
         if (typeof onComplete === 'function') {
             window.syncCompleteHandlers.push(onComplete);
         }
+
+        resetStatusReader();
 
         const widget = document.getElementById('globalSyncWidget');
         if (widget) widget.style.display = 'block';
@@ -306,6 +696,17 @@
             step_current: 0, step_total: 0, step_percent: 0, step_detail: 'Initialisierung...',
             rate_limit_remaining: 500, rate_limit_max: 500, rate_limit_waiting: false, eta_seconds: null
         };
+
+        currentSyncUser = p.current_user || null;
+
+        const readerCard = document.getElementById('syncStatusReaderCard');
+        if (readerCard) {
+            if (snippetPool.length === 0) {
+                readerCard.style.display = 'none';
+            } else {
+                readerCard.style.display = 'block';
+            }
+        }
 
         // Header User (Einzelnes Raketen-Emoji über das statische <span> im Header)
         const headerUser = document.getElementById('syncHeaderUser');
@@ -452,12 +853,48 @@
             return;
         }
 
-        fetch('/task_status/' + tid)
+        const offset = snippetPool.length;
+        fetch('/task_status/' + tid + '?snippet_offset=' + offset)
         .then(r => r.json())
         .then(st => {
             if (st.status === 'error' && (!st.logs || st.logs.includes('Task nicht gefunden'))) {
                 cleanupSyncTask();
                 return;
+            }
+
+            // Status-Snippets verarbeiten
+            if (st.new_snippets && Array.isArray(st.new_snippets) && st.new_snippets.length > 0) {
+                const knownIds = new Set(snippetPool.map(s => s.statusId));
+                let addedAny = false;
+                for (const snip of st.new_snippets) {
+                    if (snip && snip.statusId && !knownIds.has(snip.statusId)) {
+                        knownIds.add(snip.statusId);
+                        snippetPool.push(snip);
+                        addedAny = true;
+                    }
+                }
+                if (snippetPool.length > 0) {
+                    const readerCard = document.getElementById('syncStatusReaderCard');
+                    if (readerCard && readerCard.style.display === 'none') {
+                        readerCard.style.display = 'block';
+                    }
+                    if (historyIndex === -1) {
+                        const currentUser = (st.progress && st.progress.current_user) || currentSyncUser;
+                        const first = pickWeightedRandomSnippet(snippetPool, currentUser, null);
+                        if (first) {
+                            snippetHistory.push(first);
+                            historyIndex = 0;
+                            renderCurrentSnippet();
+                            startSnippetTicker();
+                        }
+                    } else if (addedAny) {
+                        const countSpan = document.getElementById('syncReaderCount');
+                        if (countSpan) {
+                            const count = snippetPool.length;
+                            countSpan.textContent = `${count} Status${count === 1 ? '' : 'se'}`;
+                        }
+                    }
+                }
             }
 
             updateSyncWidgetUI(st);
@@ -498,6 +935,7 @@
         try {
             sessionStorage.removeItem('activeTraewellingTaskId');
         } catch (e) {}
+        resetStatusReader();
     }
 
     window.checkActiveSyncTask = function(onComplete) {

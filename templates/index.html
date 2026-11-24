@@ -102,6 +102,8 @@
         .btn-success:hover { background-color: #218838; }
         .btn-accent { background-color: #6f42c1; }
         .btn-accent:hover { background-color: #5a32a3; }
+        .btn-outline { background-color: #ffffff; color: #004488; border: 1px solid #d0d7de; }
+        .btn-outline:hover { background-color: #f3f4f6; border-color: #004488; color: #003366; }
         
         .login-wrapper { max-width: 540px; margin: 0 auto; }
         .alert { background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; padding: 12px 16px; border-radius: 6px; font-size: 14px; margin-bottom: 20px; }
@@ -149,7 +151,7 @@
                 <form id="indexSyncForm" onsubmit="startIndexSync(event)">
                     <!-- Suchfeld & Schnellwahl-Buttons -->
                     <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px;">
-                        <input type="text" id="syncFilterInput" class="form-control" placeholder="🔍 Freund filtern..." style="flex: 1 1 200px; padding: 7px 12px; font-size: 13.5px; border: 1px solid #ced4da; border-radius: 6px; box-sizing: border-box;" oninput="filterFriendsList()">
+                        <input type="text" id="syncFilterInput" class="form-control" placeholder="🔍 Freund filtern oder beliebigen Träwelling-User suchen..." style="flex: 1 1 200px; padding: 7px 12px; font-size: 13.5px; border: 1px solid #ced4da; border-radius: 6px; box-sizing: border-box;" oninput="onSyncFilterInput()">
                         <div style="display: flex; gap: 6px; flex-wrap: wrap;">
                             <button type="button" class="btn btn-sm" onclick="selectSelfOnly()" style="background: white; color: #004488; border: 1px solid #004488; padding: 6px 12px; font-size: 12.5px; border-radius: 6px; cursor: pointer; font-weight: 600;">👤 Nur ich</button>
                             {% if is_admin %}
@@ -186,6 +188,19 @@
                         {% else %}
                             <div style="padding: 12px; text-align: center; color: #888; font-size: 13.5px;">Keine Freunde gefunden.</div>
                         {% endif %}
+                    </div>
+
+                    <!-- 🌐 Träwelling Live-Suche Ergebnisse -->
+                    <div id="traewellingSearchContainer" style="display: none; margin-bottom: 14px; border: 1px dashed #004488; border-radius: 8px; padding: 10px 12px; background: #f0f7ff;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <span style="font-weight: 700; color: #004488; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+                                <span>🌐</span> Träwelling-Suche
+                            </span>
+                            <span id="searchSpinner" style="display: none; font-size: 12px; color: #004488; font-weight: 600;">
+                                ⏳ Suche...
+                            </span>
+                        </div>
+                        <div id="searchResultsList" style="display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto;"></div>
                     </div>
 
                     <!-- Start-Button -->
@@ -318,6 +333,19 @@
             }
         }
 
+        let searchDebounceTimer = null;
+        let searchAbortController = null;
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
         function filterFriendsList() {
             const query = (document.getElementById('syncFilterInput').value || '').trim().toLowerCase();
             document.querySelectorAll('.sync-user-item').forEach(item => {
@@ -328,6 +356,169 @@
                     item.style.display = 'none';
                 }
             });
+        }
+
+        function onSyncFilterInput() {
+            // 1. Sofortiges lokales Filtern der Freunde-Liste
+            filterFriendsList();
+
+            // 2. Debounced Träwelling-Suche ab 2 Zeichen
+            const query = (document.getElementById('syncFilterInput').value || '').trim();
+            const searchContainer = document.getElementById('traewellingSearchContainer');
+            const resultsList = document.getElementById('searchResultsList');
+            const spinner = document.getElementById('searchSpinner');
+
+            if (searchDebounceTimer) {
+                clearTimeout(searchDebounceTimer);
+                searchDebounceTimer = null;
+            }
+            if (searchAbortController) {
+                searchAbortController.abort();
+                searchAbortController = null;
+            }
+
+            if (query.length < 2) {
+                if (searchContainer) searchContainer.style.display = 'none';
+                if (resultsList) resultsList.innerHTML = '';
+                return;
+            }
+
+            if (searchContainer) searchContainer.style.display = 'block';
+            if (spinner) spinner.style.display = 'inline';
+
+            searchDebounceTimer = setTimeout(() => {
+                searchAbortController = new AbortController();
+                fetch('/api/search_users?q=' + encodeURIComponent(query), {
+                    signal: searchAbortController.signal
+                })
+                .then(r => {
+                    if (!r.ok) {
+                        return r.json().then(errData => { throw new Error(errData.error || ('HTTP ' + r.status)); });
+                    }
+                    return r.json();
+                })
+                .then(data => {
+                    if (spinner) spinner.style.display = 'none';
+                    renderSearchResults(data.users || []);
+                })
+                .catch(err => {
+                    if (err.name === 'AbortError') return;
+                    if (spinner) spinner.style.display = 'none';
+                    if (resultsList) {
+                        resultsList.innerHTML = `<div style="font-size: 12.5px; color: #cf222e; padding: 4px;">⚠️ ${escapeHtml(err.message || 'Fehler bei der Suche')}</div>`;
+                    }
+                });
+            }, 350);
+        }
+
+        function renderSearchResults(users) {
+            const resultsList = document.getElementById('searchResultsList');
+            if (!resultsList) return;
+
+            // Bestehende User im Container ermitteln (Deduplizierung)
+            const existingUsernames = new Set(
+                Array.from(document.querySelectorAll('.sync-user-item'))
+                    .map(el => (el.getAttribute('data-username') || '').toLowerCase())
+            );
+
+            const filteredUsers = users.filter(u => u.username && !existingUsernames.has(u.username.toLowerCase()));
+
+            if (filteredUsers.length === 0) {
+                resultsList.innerHTML = '<div style="font-size: 12.5px; color: #57606a; padding: 6px;">Keine weiteren Accounts auf Träwelling gefunden.</div>';
+                return;
+            }
+
+            let html = '';
+            filteredUsers.forEach(u => {
+                const isDifferentName = u.displayName && u.displayName !== u.username;
+                const invisibleBadge = u.likelyInvisible 
+                    ? `<span class="sync-badge sync-badge-no-data sync-badge-invisible" style="background: #fff8e1; color: #9a6700; border: 1px solid #ffe082; font-size: 11px;" title="Privates Profil (kein Freund) – Check-ins können unsichtbar sein">⚠️ Check-ins wahrscheinlich unsichtbar</span>` 
+                    : '';
+
+                html += `
+                    <div class="search-result-item" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; background: white; padding: 7px 10px; border-radius: 6px; border: 1px solid #d0d7de;">
+                        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0;">
+                            <span style="font-weight: 700; color: #1f2328; font-size: 13.5px;">@${escapeHtml(u.username)}</span>
+                            ${isDifferentName ? `<span style="color: #57606a; font-size: 12.5px;">(${escapeHtml(u.displayName)})</span>` : ''}
+                            ${invisibleBadge}
+                        </div>
+                        <div style="display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                            <button type="button" class="btn btn-sm" onclick="addFoundUserToSync('${escapeHtml(u.username)}', ${u.likelyInvisible})" style="background: #004488; color: white; border: none; padding: 4px 10px; font-size: 12px; border-radius: 5px; cursor: pointer; font-weight: 600; flex-shrink: 0;">
+                                ➕ Hinzufügen
+                            </button>
+                            <a href="https://traewelling.de/@${encodeURIComponent(u.username)}" target="_blank" rel="noopener" class="btn btn-sm btn-outline" style="padding: 4px 10px; font-size: 12px; border-radius: 5px; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;" title="Profil von @${escapeHtml(u.username)} auf Träwelling in neuem Tab öffnen">
+                                ↗ Auf Träwelling öffnen
+                            </a>
+                        </div>
+                    </div>
+                `;
+            });
+            resultsList.innerHTML = html;
+        }
+
+        function addFoundUserToSync(rawUsername, likelyInvisible) {
+            const container = document.getElementById('syncUsersContainer');
+            if (!container) return;
+
+            // Platzhalter "Keine Freunde gefunden" entfernen falls vorhanden
+            const emptyNotice = container.querySelector('div[style*="text-align: center"]');
+            if (emptyNotice && emptyNotice.textContent.includes('Keine Freunde gefunden')) {
+                emptyNotice.remove();
+            }
+
+            // Prüfen ob bereits vorhanden
+            const existing = container.querySelector(`.sync-user-item[data-username="${rawUsername.toLowerCase()}"]`);
+            if (existing) {
+                const cb = existing.querySelector('.sync-user-checkbox');
+                if (cb) cb.checked = true;
+                existing.style.display = 'flex';
+                removeSearchResultRow(rawUsername);
+                return;
+            }
+
+            const invisibleBadge = likelyInvisible 
+                ? `<span class="sync-badge sync-badge-no-data sync-badge-invisible" style="background: #fff8e1; color: #9a6700; border: 1px solid #ffe082;" title="Privates Profil (kein Freund) – Check-ins können unsichtbar sein">⚠️ Check-ins wahrscheinlich unsichtbar</span>` 
+                : '';
+
+            const newLabel = document.createElement('label');
+            newLabel.className = 'sync-user-item';
+            newLabel.setAttribute('data-username', rawUsername.toLowerCase());
+            newLabel.setAttribute('data-has-data', 'false');
+            newLabel.style.display = 'flex';
+            newLabel.innerHTML = `
+                <div class="sync-user-left">
+                    <input type="checkbox" name="users" value="${escapeHtml(rawUsername)}" checked class="sync-user-checkbox">
+                    <span class="sync-username-text">
+                        <strong>${escapeHtml(rawUsername)}</strong>
+                    </span>
+                </div>
+                <div class="sync-user-status-col" id="statusCol-${escapeHtml(rawUsername)}" style="display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                    ${invisibleBadge}
+                    <span class="sync-badge sync-badge-no-data">
+                        Keine Daten
+                    </span>
+                </div>
+            `;
+
+            container.appendChild(newLabel);
+            newLabel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+            removeSearchResultRow(rawUsername);
+        }
+
+        function removeSearchResultRow(username) {
+            const resultsList = document.getElementById('searchResultsList');
+            if (!resultsList) return;
+            const items = resultsList.querySelectorAll('.search-result-item');
+            items.forEach(el => {
+                const span = el.querySelector('span');
+                if (span && span.textContent.trim() === '@' + username) {
+                    el.remove();
+                }
+            });
+            if (resultsList.children.length === 0) {
+                resultsList.innerHTML = '<div style="font-size: 12.5px; color: #57606a; padding: 6px;">Keine weiteren Accounts auf Träwelling gefunden.</div>';
+            }
         }
 
         function selectSelfOnly() {
@@ -410,13 +601,19 @@
                     const item = col ? col.closest('.sync-user-item') : null;
                     if (col && item) {
                         item.setAttribute('data-has-data', u.last_arrival_date ? 'true' : 'false');
+                        const hasInvisibleBadge = col.querySelector('.sync-badge-invisible') !== null;
+                        const invisibleBadgeHtml = hasInvisibleBadge
+                            ? `<span class="sync-badge sync-badge-no-data sync-badge-invisible" style="background: #fff8e1; color: #9a6700; border: 1px solid #ffe082;" title="Privates Profil (kein Freund) – Check-ins können unsichtbar sein">⚠️ Check-ins wahrscheinlich unsichtbar</span> `
+                            : '';
                         if (u.last_arrival_date) {
                             col.innerHTML = `
+                                ${invisibleBadgeHtml}
                                 <span class="sync-badge sync-badge-has-data" title="${u.trip_count} sichtbare Fahrten in der Datenbank">
                                     Stand: ${u.last_arrival_date}
                                 </span>`;
                         } else {
                             col.innerHTML = `
+                                ${invisibleBadgeHtml}
                                 <span class="sync-badge sync-badge-no-data">
                                     Keine Daten
                                 </span>`;

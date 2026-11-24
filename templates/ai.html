@@ -659,16 +659,21 @@
             z-index: 3000;
             justify-content: center;
             align-items: center;
-            padding: 15px;
+            padding: 20px 15px;
+            overflow-y: auto;
         }
         .modal-backdrop.active { display: flex; }
         .modal-card {
             background: white;
             width: 100%;
-            max-width: 520px;
+            max-width: 540px;
+            max-height: calc(100vh - 40px);
             border-radius: 10px;
             padding: 24px;
             box-shadow: 0 15px 35px rgba(0,0,0,0.25);
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            margin: auto;
         }
         .modal-card h2 {
             margin-top: 0;
@@ -898,9 +903,14 @@
 </div>
 
 <!-- MODAL: API-KEY & BYOK SETUP -->
-<div class="modal-backdrop" id="apiKeyModal">
-    <div class="modal-card" style="max-width: 520px;">
-        <h2 style="margin-top:0;">🔑 Gemini API-Key &amp; Rate-Limit</h2>
+<div class="modal-backdrop" id="apiKeyModal" onclick="if(event.target === this) closeApiKeyModal();">
+    <div class="modal-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; border-bottom: 1px solid #eee; padding-bottom: 8px;">
+            <h2 style="margin: 0; font-size: 19px; color: var(--primary); display: flex; align-items: center; gap: 8px;">
+                🔑 Gemini API-Key &amp; Rate-Limit
+            </h2>
+            <button type="button" onclick="closeApiKeyModal()" style="background: none; border: none; font-size: 22px; cursor: pointer; color: #888; padding: 2px 8px; border-radius: 4px; line-height: 1;" title="Schließen (Esc)" onmouseover="this.style.color='#111'" onmouseout="this.style.color='#888'">✖</button>
+        </div>
         
         <!-- Status Box -->
         <div id="byokStatusBox" style="padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; line-height: 1.5; background: #eef5fa; border: 1px solid #cce0f0;">
@@ -984,6 +994,12 @@
         });
 
         loadByokStatus();
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeApiKeyModal();
+            }
+        });
     });
 
     function updateUserCountBadge() {
@@ -1564,10 +1580,21 @@
             });
 
             const rawText = await resp.text();
-            let data;
+            let data = null;
             try {
                 data = JSON.parse(rawText);
             } catch (e) {
+                // Falls der Reverse-Proxy bei HTTP 418 eine eigene Fehlerseite statt JSON liefert:
+                if (resp.status === 418) {
+                    removeLoadingIndicator();
+                    appendMessageBubble(
+                        'model',
+                        `🫖 **418 I'm a teapot:** Ich bin eine Bahn-Datenbank auf tee_beutel-Basis, keine Kaffeemaschine!`,
+                        null, null, null, new Date().toISOString(), true
+                    );
+                    return;
+                }
+
                 console.warn('JSON-Parsing-Fehler bei /api/ai/chat, versuche Backup-Endpunkt (nur Text)...', e);
                 const backupData = await fetchBackupAnswer(currentChatId);
                 removeLoadingIndicator();
@@ -1608,13 +1635,20 @@
 
             removeLoadingIndicator();
 
+            // Teapot-Check (HTTP 418) VOR dem Backup-Fallback abfangen!
+            if (resp.status === 418 || (data && data.is_teapot)) {
+                const teapotText = (data && data.error) ? data.error : "418 I'm a teapot: Ich bin eine Bahn-Datenbank, keine Kaffeemaschine! 🫖";
+                appendMessageBubble('model', `🫖 **${teapotText}**`, null, null, null, new Date().toISOString(), true);
+                return;
+            }
+
             if (!data.success) {
                 if (data.rate_limited) {
                     appendMessageBubble('model', `⏳ **Rate-Limit erreicht!**\n\nDu hast deine 10 kostenlosen Anfragen für diese Stunde verbraucht.\n\n👉 **Tipp:** Du kannst oben auf [🔑 API-Key & Rate-Limit](javascript:openApiKeyModal()) klicken und deinen eigenen (kostenlosen) Google Gemini API-Key eintragen, um sofort unbegrenzt weiterzufragen.`, null, null, null, new Date().toISOString(), true);
                     loadByokStatus();
                 } else {
-                    // Falls ein 500er Fehler erst beim Serialisieren der Antwort auftrat, prüfen ob die Antwort schon in der DB liegt
-                    const backupData = await fetchBackupAnswer(currentChatId);
+                    // Backup-Fallback nur noch bei echten 500er-Serverfehlern ausführen
+                    const backupData = (resp.status >= 500) ? await fetchBackupAnswer(currentChatId) : null;
                     if (backupData) {
                         currentChatId = backupData.chat_id;
                         const bubbleWrapper = appendMessageBubble('model', backupData.answer, null, null, null, backupData.created_at || new Date().toISOString(), true);

@@ -27,25 +27,337 @@ import reverse_geocoder as rgeo
 import pycountry
 import babel
 import re
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import threading
 from contextlib import contextmanager
 
 # ==========================================
-# GLOBALE VARIABLEN & CACHES
+# GLOBALE VARIABLEN & THREAD-LOKALER KONTEXT
 # ==========================================
 tf = None
-AUTH_USER = ""
-FOLLOWED_USERS = set()
-FOLLOWERS_USERS = set()
-TRUSTED_USERS = set()
-remaining = "Unbekannt"
+_USER_CTX = threading.local()
 _INTERACTIVE_FILTER_CTX = threading.local()
 
 
-# ==========================================
-# HILFS- UND API-FUNKTIONEN
-# ==========================================
+def get_auth_user() -> str:
+    return getattr(_USER_CTX, 'auth_user', "") or ""
+
+
+def set_auth_user(val: str) -> None:
+    _USER_CTX.auth_user = str(val or "").strip()
+
+
+def get_followed_users() -> set:
+    val = getattr(_USER_CTX, 'followed_users', None)
+    return set(val) if val is not None else set()
+
+
+def set_followed_users(val) -> None:
+    _USER_CTX.followed_users = set(val) if val else set()
+
+
+def get_followers_users() -> set:
+    val = getattr(_USER_CTX, 'followers_users', None)
+    return set(val) if val is not None else set()
+
+
+def set_followers_users(val) -> None:
+    _USER_CTX.followers_users = set(val) if val else set()
+
+
+def get_trusted_users() -> set:
+    val = getattr(_USER_CTX, 'trusted_users', None)
+    return set(val) if val is not None else set()
+
+
+def set_trusted_users(val) -> None:
+    _USER_CTX.trusted_users = set(val) if val else set()
+
+
+def get_remaining() -> str:
+    val = getattr(_USER_CTX, 'remaining', None)
+    return "Unbekannt" if val is None else str(val)
+
+
+def set_remaining(val) -> None:
+    _USER_CTX.remaining = "Unbekannt" if val is None else str(val)
+
+
+def clear_user_context() -> None:
+    _USER_CTX.auth_user = ""
+    _USER_CTX.followed_users = set()
+    _USER_CTX.followers_users = set()
+    _USER_CTX.trusted_users = set()
+    _USER_CTX.remaining = "Unbekannt"
+
+
+@contextmanager
+def user_auth_context(auth_user: str = "", followed=None, followers=None, trusted=None, remaining=None):
+    prev_auth = getattr(_USER_CTX, 'auth_user', "")
+    prev_followed = getattr(_USER_CTX, 'followed_users', None)
+    prev_followers = getattr(_USER_CTX, 'followers_users', None)
+    prev_trusted = getattr(_USER_CTX, 'trusted_users', None)
+    prev_remaining = getattr(_USER_CTX, 'remaining', "Unbekannt")
+    try:
+        set_auth_user(auth_user)
+        set_followed_users(followed)
+        set_followers_users(followers)
+        set_trusted_users(trusted)
+        if remaining is not None:
+            set_remaining(remaining)
+        yield
+    finally:
+        _USER_CTX.auth_user = prev_auth
+        _USER_CTX.followed_users = prev_followed
+        _USER_CTX.followers_users = prev_followers
+        _USER_CTX.trusted_users = prev_trusted
+        _USER_CTX.remaining = prev_remaining
+
+
+@contextmanager
+def user_auth_context_from_db(conn: sqlite3.Connection, creator: str):
+    followed = set()
+    trusted = set()
+    followers = set()
+    if creator:
+        cur = conn.cursor()
+        cur.execute("SELECT followed_users, trusted_users, followers FROM user_login_data WHERE owner = ?", (creator,))
+        row = cur.fetchone()
+        if row:
+            try:
+                followed = set(json.loads(row[0])) if row[0] else set()
+            except Exception:
+                followed = set()
+            try:
+                trusted = set(json.loads(row[1])) if row[1] else set()
+            except Exception:
+                trusted = set()
+            try:
+                followers = set(json.loads(row[2])) if row[2] else set()
+            except Exception:
+                followers = set()
+    with user_auth_context(auth_user=creator, followed=followed, followers=followers, trusted=trusted):
+        yield
+
+
+def get_export_dir(folder_type: str, creator_username: str | None = None) -> Path:
+    safe_folder = os.path.basename(folder_type)
+    owner = (creator_username or get_auth_user() or "").strip()
+    if owner:
+        safe_owner = os.path.basename(owner)
+        path = Path('finished_exports') / safe_owner / safe_folder
+    else:
+        path = Path('finished_exports') / safe_folder
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def __getattr__(name: str):
+    if name == 'AUTH_USER':
+        return get_auth_user()
+    if name == 'FOLLOWED_USERS':
+        return get_followed_users()
+    if name == 'FOLLOWERS_USERS':
+        return get_followers_users()
+    if name == 'TRUSTED_USERS':
+        return get_trusted_users()
+    if name == 'remaining':
+        return get_remaining()
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
+
+class _TraewellingAnalysisModule(sys.modules[__name__].__class__):
+    def __getattr__(self, name):
+        if name == 'AUTH_USER':
+            return get_auth_user()
+        if name == 'FOLLOWED_USERS':
+            return get_followed_users()
+        if name == 'FOLLOWERS_USERS':
+            return get_followers_users()
+        if name == 'TRUSTED_USERS':
+            return get_trusted_users()
+        if name == 'remaining':
+            return get_remaining()
+        raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
+    def __setattr__(self, name, value):
+        if name == 'AUTH_USER':
+            set_auth_user(value)
+        elif name == 'FOLLOWED_USERS':
+            set_followed_users(value)
+        elif name == 'FOLLOWERS_USERS':
+            set_followers_users(value)
+        elif name == 'TRUSTED_USERS':
+            set_trusted_users(value)
+        elif name == 'remaining':
+            set_remaining(value)
+        else:
+            super().__setattr__(name, value)
+
+
+sys.modules[__name__].__class__ = _TraewellingAnalysisModule
+
+
+
+TOKEN_REFRESH_LOCK = threading.Lock()
+OAUTH_TOKEN_URL = 'https://traewelling.de/oauth/token'
+
+class StopTaskException(Exception):
+    """Spezifische Exception um einen laufenden Thread sicher abzubrechen, ohne die DB zu zerstören."""
+    pass
+
+
+def refresh_oauth_token(conn: sqlite3.Connection | None, username: str, force: bool = False) -> str | None:
+    if not username:
+        return None
+    with TOKEN_REFRESH_LOCK:
+        needs_close = False
+        db_conn = conn
+        if db_conn is None:
+            db_conn = init_db()
+            needs_close = True
+        try:
+            cur = db_conn.cursor()
+            cur.execute("SELECT access_token, refresh_token, expires_at FROM user_login_data WHERE owner = ?", (username,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            cur_access, cur_refresh, cur_expires = row[0], row[1], row[2]
+
+            # Double-Check innerhalb des Locks:
+            # Falls nicht force und expires_at vorhanden und expires_at - time() > 300,
+            # wurde der Token bereits durch einen anderen Thread erneuert!
+            if not force and cur_expires is not None:
+                try:
+                    if (float(cur_expires) - time()) > 300:
+                        return cur_access
+                except (ValueError, TypeError):
+                    pass
+
+            if not cur_refresh or not str(cur_refresh).strip():
+                return None
+
+            load_dotenv()
+            client_id = os.getenv('CLIENT_ID')
+            client_secret = os.getenv('CLIENT_SECRET')
+            if not client_id or not client_secret:
+                log_error_to_db(
+                    username=username,
+                    error_type="OAUTH_CONFIG_MISSING",
+                    error_message="CLIENT_ID oder CLIENT_SECRET fehlt in der Umgebung (.env)",
+                    context="refresh_oauth_token",
+                    conn=db_conn
+                )
+                return None
+
+            data = {
+                'grant_type': 'refresh_token',
+                'refresh_token': cur_refresh,
+                'client_id': client_id,
+                'client_secret': client_secret
+            }
+            headers = {
+                'Accept': 'application/json',
+                'User-Agent': 'TraewellingAnalysis_v10 tee_beutel'
+            }
+
+            try:
+                resp = requests.post(OAUTH_TOKEN_URL, data=data, headers=headers, timeout=20)
+            except Exception as e:
+                log_error_to_db(
+                    username=username,
+                    error=e,
+                    error_type="OAUTH_REFRESH_NETWORK_ERROR",
+                    error_message=f"Netzwerkfehler beim Token-Refresh: {e}",
+                    context="refresh_oauth_token",
+                    conn=db_conn
+                )
+                return None
+
+            if resp.status_code == 200:
+                token_json = resp.json()
+                new_access_token = token_json.get('access_token')
+                new_refresh_token = token_json.get('refresh_token') or cur_refresh
+                expires_in = token_json.get('expires_in')
+                new_expires_at = (time() + float(expires_in)) if expires_in else None
+
+                cur.execute("""
+                    UPDATE user_login_data 
+                    SET access_token = ?, refresh_token = ?, expires_at = ? 
+                    WHERE owner = ?
+                """, (new_access_token, new_refresh_token, new_expires_at, username))
+                db_conn.commit()
+                return new_access_token
+            else:
+                log_error_to_db(
+                    username=username,
+                    error_type=f"OAUTH_REFRESH_{resp.status_code}",
+                    error_message=f"Token-Refresh fehlgeschlagen: {resp.text}",
+                    context="refresh_oauth_token",
+                    conn=db_conn
+                )
+                if resp.status_code in (400, 401):
+                    cur.execute("UPDATE user_login_data SET refresh_token = NULL WHERE owner = ?", (username,))
+                    db_conn.commit()
+                return None
+        finally:
+            if needs_close:
+                db_conn.close()
+
+
+def get_valid_access_token(conn: sqlite3.Connection | None, username: str, min_validity_sec: int = 600) -> str | None:
+    if not username:
+        return None
+    needs_close = False
+    db_conn = conn
+    if db_conn is None:
+        db_conn = init_db()
+        needs_close = True
+    try:
+        cur = db_conn.cursor()
+        cur.execute("SELECT access_token, refresh_token, expires_at FROM user_login_data WHERE owner = ?", (username,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        access_token, refresh_token, expires_at = row[0], row[1], row[2]
+
+        if refresh_token and expires_at is not None:
+            try:
+                exp_ts = float(expires_at)
+                if time() + min_validity_sec >= exp_ts:
+                    refreshed = refresh_oauth_token(db_conn, username)
+                    if refreshed:
+                        return refreshed
+                    if time() < exp_ts:
+                        return access_token
+                    return None
+            except (ValueError, TypeError):
+                pass
+        return access_token or None
+    finally:
+        if needs_close:
+            db_conn.close()
+
+
+def traewelling_api_get(url: str, api_token: str, conn: sqlite3.Connection | None = None,
+                        username: str | None = None, timeout: int = 20) -> tuple[requests.Response, str]:
+    headers = {
+        'accept': 'application/json',
+        'Authorization': f'Bearer {api_token}',
+        'User-Agent': 'TraewellingAnalysis_v10 tee_beutel'
+    }
+    resp = requests.get(url, headers=headers, timeout=timeout)
+    if resp.status_code == 401:
+        target_owner = username or get_auth_user()
+        if target_owner:
+            new_token = refresh_oauth_token(conn, target_owner, force=True)
+            if new_token:
+                headers['Authorization'] = f'Bearer {new_token}'
+                retry_resp = requests.get(url, headers=headers, timeout=timeout)
+                return retry_resp, new_token
+    return resp, api_token
 
 
 #Debug-Funktionen
@@ -63,11 +375,7 @@ def reload_single_status(conn: sqlite3.Connection, api_token: str, status_id: in
     old_values = dict(zip(columns, old_row)) if old_row else {}
 
     # 2. Status von API laden
-    resp = requests.get(f'https://traewelling.de/api/v1/status/{status_id}', headers={
-        'accept': 'application/json',
-        'Authorization': f'Bearer {api_token}',
-        'User-Agent': 'TraewellingAnalysis_v10 tee_beutel'
-    })
+    resp, api_token = traewelling_api_get(f'https://traewelling.de/api/v1/status/{status_id}', api_token, conn=conn)
     if resp.status_code != 200:
         log_error_to_db(error_type=f"HTTP_{resp.status_code}", error_message=f"Status {status_id} lieferte HTTP {resp.status_code}", context=f"reload_single_status (status_id: {status_id})")
         return False, {}
@@ -83,11 +391,7 @@ def reload_single_status(conn: sqlite3.Connection, api_token: str, status_id: in
     # 3. Zwischenhalte laden
     inter_stations = {}
     if trip_id:
-        inter_resp = requests.get(f"https://traewelling.de/api/v1/stopovers/{trip_id}", headers={
-            'accept': 'application/json',
-            'Authorization': f'Bearer {api_token}',
-            'User-Agent': 'TraewellingAnalysis_v10 tee_beutel'
-        })
+        inter_resp, api_token = traewelling_api_get(f"https://traewelling.de/api/v1/stopovers/{trip_id}", api_token, conn=conn)
         if inter_resp.status_code == 200:
             inter_data = inter_resp.json().get('data', {})
             if isinstance(inter_data, dict):
@@ -347,11 +651,7 @@ def fetch_paginated_users(api_token: str, start_url: str) -> set:
     url = start_url
     while url:
         try:
-            resp = requests.get(url, headers={
-                'accept': 'application/json',
-                'Authorization': f'Bearer {api_token}',
-                'User-Agent': 'TraewellingAnalysis_v10 tee_beutel'
-            })
+            resp, api_token = traewelling_api_get(url, api_token)
             resp.raise_for_status()
             data = resp.json()
 
@@ -382,7 +682,6 @@ def fetch_paginated_users(api_token: str, start_url: str) -> set:
 
 
 def log_onto_traewelling(conn: sqlite3.Connection) -> str:
-    global AUTH_USER, FOLLOWED_USERS, TRUSTED_USERS, FOLLOWERS_USERS, remaining
     api_token = os.getenv('TRAEWELLING_API_TOKEN', '').strip()
     if not api_token:
         token_path = Path.cwd() / '.api_token.txt'
@@ -400,19 +699,17 @@ def log_onto_traewelling(conn: sqlite3.Connection) -> str:
 
     repeat_bool = True
     while repeat_bool:
-        login_response = requests.get('https://traewelling.de/api/v1/auth/user',
-                                      headers={'accept': 'application/json',
-                                               'Authorization': f'Bearer {api_token}',
-                                               'User-Agent': 'TraewellingAnalysis_v10 tee_beutel'})
+        login_response, api_token = traewelling_api_get('https://traewelling.de/api/v1/auth/user',
+                                                        api_token, conn=conn)
         try:
             login_response.raise_for_status()
             login_json = login_response.json()
 
-            remaining = login_response.headers.get('x-ratelimit-remaining')
+            set_remaining(login_response.headers.get('x-ratelimit-remaining'))
             username = login_json.get('data', {}).get('username', None)
 
             if username:
-                AUTH_USER = username
+                set_auth_user(username)
                 print(f"[LOGIN] ✅ Erfolgreich angemeldet als: {username}")
                 print("=" * 50)
             repeat_bool = False
@@ -424,9 +721,10 @@ def log_onto_traewelling(conn: sqlite3.Connection) -> str:
                 raise PermissionError(
                     f'[FEHLER] Fehler bei der Authentifizierung! Ist der Token noch gültig?\nDetails: {e}')
 
+    auth_u = get_auth_user()
     cursor = conn.cursor()
     cursor.execute("SELECT followed_users, trusted_users, followers, last_updated FROM user_login_data WHERE owner = ?",
-                   (AUTH_USER,))
+                   (auth_u,))
     row = cursor.fetchone()
 
     needs_update = True
@@ -434,9 +732,9 @@ def log_onto_traewelling(conn: sqlite3.Connection) -> str:
         try:
             last_updated_dt = datetime.fromisoformat(row[3])
             if datetime.now() - last_updated_dt < timedelta(hours=24):
-                FOLLOWED_USERS = set(json.loads(row[0])) if row[0] else set()
-                TRUSTED_USERS = set(json.loads(row[1])) if row[1] else set()
-                FOLLOWERS_USERS = set(json.loads(row[2])) if row[2] else set()
+                set_followed_users(set(json.loads(row[0])) if row[0] else set())
+                set_trusted_users(set(json.loads(row[1])) if row[1] else set())
+                set_followers_users(set(json.loads(row[2])) if row[2] else set())
                 needs_update = False
                 print("[INFO] Sichtbarkeits-Rechte aus lokalem Cache geladen.")
         except Exception:
@@ -446,9 +744,12 @@ def log_onto_traewelling(conn: sqlite3.Connection) -> str:
         print("[INFO] Aktualisiere Sichtbarkeits-Rechte (Follows/Followers/Trusted) von der API...")
 
         # Die korrekten Endpunkte gemäß API-Dokumentation
-        TRUSTED_USERS = fetch_paginated_users(api_token, 'https://traewelling.de/api/v1/user/self/trusted-by')
-        FOLLOWED_USERS = fetch_paginated_users(api_token, 'https://traewelling.de/api/v1/user/self/followings')
-        FOLLOWERS_USERS = fetch_paginated_users(api_token, 'https://traewelling.de/api/v1/user/self/followers')
+        trusted_set = fetch_paginated_users(api_token, 'https://traewelling.de/api/v1/user/self/trusted-by')
+        followed_set = fetch_paginated_users(api_token, 'https://traewelling.de/api/v1/user/self/followings')
+        followers_set = fetch_paginated_users(api_token, 'https://traewelling.de/api/v1/user/self/followers')
+        set_trusted_users(trusted_set)
+        set_followed_users(followed_set)
+        set_followers_users(followers_set)
 
         now_iso = datetime.now().isoformat()
         cursor.execute(
@@ -460,8 +761,8 @@ def log_onto_traewelling(conn: sqlite3.Connection) -> str:
                    followers = excluded.followers,
                    last_updated = excluded.last_updated,
                    last_online = excluded.last_online""",
-            (AUTH_USER, json.dumps(list(FOLLOWED_USERS)), json.dumps(list(TRUSTED_USERS)),
-             json.dumps(list(FOLLOWERS_USERS)), now_iso, now_iso))
+            (auth_u, json.dumps(list(get_followed_users())), json.dumps(list(get_trusted_users())),
+             json.dumps(list(get_followers_users())), now_iso, now_iso))
         conn.commit()
         print("[INFO] ✅ Rechte erfolgreich aktualisiert.")
 
@@ -709,9 +1010,9 @@ def log_error_to_db(username: str | None = None,
     try:
         now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        # Fallback auf AUTH_USER, falls kein Username übergeben wurde
-        if not username and AUTH_USER:
-            username = AUTH_USER
+        # Fallback auf get_auth_user(), falls kein Username übergeben wurde
+        if not username:
+            username = get_auth_user()
 
         if isinstance(error, BaseException):
             if not error_type:
@@ -849,32 +1150,37 @@ def clear_error_logs(username: str | None = None, conn: sqlite3.Connection | Non
 
 
 def get_privilege_level(username: str) -> int:
-    if username == AUTH_USER:
+    auth_user = get_auth_user()
+    if username == auth_user:
         return 3
-    if username in TRUSTED_USERS:
+    if username in get_trusted_users():
         return 2
-    if username in FOLLOWED_USERS:
+    if username in get_followed_users():
         return 1
     return 0
 
 
 def get_visibility_clause(username: str, table_prefix: str = "") -> str:
-    if username == AUTH_USER:
+    auth_user = get_auth_user()
+    if username == auth_user:
         return ""
     prefix = f"{table_prefix}." if table_prefix else ""
     allowed_visibilities = [0, 4]
-    if username in FOLLOWED_USERS:
+    if username in get_followed_users():
         allowed_visibilities.append(2)
-    if username in TRUSTED_USERS:
+    if username in get_trusted_users():
         allowed_visibilities.append(5)
     return f" AND {prefix}visibility IN ({','.join(map(str, allowed_visibilities))})"
 
 
 def get_shared_visibility_query(table_prefix: str = "") -> str:
     prefix = f"{table_prefix}." if table_prefix else ""
-    auth_cond = f"{prefix}username = '{AUTH_USER}'"
-    trusted_list = ",".join(f"'{u}'" for u in TRUSTED_USERS) if TRUSTED_USERS else "NULL"
-    followed_list = ",".join(f"'{u}'" for u in FOLLOWED_USERS) if FOLLOWED_USERS else "NULL"
+    auth_user = get_auth_user()
+    trusted_users = get_trusted_users()
+    followed_users = get_followed_users()
+    auth_cond = f"{prefix}username = '{auth_user}'"
+    trusted_list = ",".join(f"'{u}'" for u in trusted_users) if trusted_users else "NULL"
+    followed_list = ",".join(f"'{u}'" for u in followed_users) if followed_users else "NULL"
     base_vis = f" AND ({auth_cond} OR ({prefix}username IN ({trusted_list}) AND {prefix}visibility IN (0, 4, 2, 5)) OR ({prefix}username IN ({followed_list}) AND {prefix}visibility IN (0, 4, 2)) OR ({prefix}visibility IN (0, 4)))"
     extra_sql = getattr(_INTERACTIVE_FILTER_CTX, 'sql_clause', '')
     if extra_sql:
@@ -952,96 +1258,67 @@ def get_users_sync_overview(conn: sqlite3.Connection, creator: str, is_admin: bo
     Normale User (is_admin=False) sehen nur sich selbst und ihre Freunde aus user_login_data.
     Admins (is_admin=True) sehen zusätzlich alle Accounts mit Daten in users oder journeys.
     """
-    global AUTH_USER, FOLLOWED_USERS, TRUSTED_USERS, FOLLOWERS_USERS
-    cursor = conn.cursor()
+    with user_auth_context_from_db(conn, creator):
+        cursor = conn.cursor()
+        all_friends = set().union(get_followed_users(), get_trusted_users(), get_followers_users())
 
-    # 1. Lade followed_users, trusted_users und followers aus user_login_data für creator
-    cursor.execute("SELECT followed_users, trusted_users, followers FROM user_login_data WHERE owner = ?", (creator,))
-    row = cursor.fetchone()
+        # 2. Wenn Admin: zusätzlich alle Accounts mit Daten in der Datenbank (users und journeys)
+        if is_admin:
+            cursor.execute("""
+                SELECT username FROM users WHERE username IS NOT NULL AND username != ''
+                UNION
+                SELECT DISTINCT username FROM journeys WHERE username IS NOT NULL AND username != ''
+            """)
+            for u_row in cursor.fetchall():
+                if u_row[0]:
+                    all_friends.add(u_row[0])
 
-    AUTH_USER = creator
-    FOLLOWED_USERS = set()
-    TRUSTED_USERS = set()
-    FOLLOWERS_USERS = set()
+        all_friends.discard(creator)
+        sorted_friends = sorted(list(all_friends), key=lambda s: s.lower())
+        all_users = [creator] + sorted_friends
 
-    all_friends = set()
-    if row:
-        if row[0]:
-            try:
-                FOLLOWED_USERS = set(json.loads(row[0]))
-                all_friends.update(FOLLOWED_USERS)
-            except Exception:
-                pass
-        if row[1]:
-            try:
-                TRUSTED_USERS = set(json.loads(row[1]))
-                all_friends.update(TRUSTED_USERS)
-            except Exception:
-                pass
-        if row[2]:
-            try:
-                FOLLOWERS_USERS = set(json.loads(row[2]))
-                all_friends.update(FOLLOWERS_USERS)
-            except Exception:
-                pass
+        # 3. Frage für alle diese User aus journeys das Ankunftsdatum des jeweils letzten gespeicherten Status ab
+        vis_clause = get_shared_visibility_query()
+        query = f"""
+        SELECT username,
+               MAX(COALESCE(arrivalFinal, arrivalPlanned, departureFinal, departurePlanned)) AS last_arrival,
+               COUNT(statusId) AS trip_count
+        FROM journeys
+        WHERE 1=1 {vis_clause}
+        GROUP BY username
+        """
+        cursor.execute(query)
+        user_stats = {}
+        for uname, last_arr, count in cursor.fetchall():
+            user_stats[uname] = {
+                'last_arrival': last_arr,
+                'trip_count': count or 0
+            }
 
-    # 2. Wenn Admin: zusätzlich alle Accounts mit Daten in der Datenbank (users und journeys)
-    if is_admin:
-        cursor.execute("""
-            SELECT username FROM users WHERE username IS NOT NULL AND username != ''
-            UNION
-            SELECT DISTINCT username FROM journeys WHERE username IS NOT NULL AND username != ''
-        """)
-        for u_row in cursor.fetchall():
-            if u_row[0]:
-                all_friends.add(u_row[0])
+        # 4. & 5. Formatiere Ergebnisliste mit creator an 1. Stelle
+        result = []
+        for u in all_users:
+            stats = user_stats.get(u, {'last_arrival': None, 'trip_count': 0})
+            last_arr_raw = stats['last_arrival']
+            german_date = None
+            if last_arr_raw:
+                try:
+                    date_str = str(last_arr_raw).split('T')[0]
+                    parts = date_str.split('-')
+                    if len(parts) == 3:
+                        german_date = f"{parts[2]}.{parts[1]}.{parts[0]}"
+                except Exception:
+                    german_date = None
 
-    all_friends.discard(creator)
-    sorted_friends = sorted(list(all_friends), key=lambda s: s.lower())
-    all_users = [creator] + sorted_friends
+            result.append({
+                'username': u,
+                'is_self': (u == creator),
+                'last_arrival_date': german_date,
+                'last_arrival_iso': last_arr_raw,
+                'trip_count': stats['trip_count']
+            })
 
-    # 3. Frage für alle diese User aus journeys das Ankunftsdatum des jeweils letzten gespeicherten Status ab
-    vis_clause = get_shared_visibility_query()
-    query = f"""
-    SELECT username,
-           MAX(COALESCE(arrivalFinal, arrivalPlanned, departureFinal, departurePlanned)) AS last_arrival,
-           COUNT(statusId) AS trip_count
-    FROM journeys
-    WHERE 1=1 {vis_clause}
-    GROUP BY username
-    """
-    cursor.execute(query)
-    user_stats = {}
-    for uname, last_arr, count in cursor.fetchall():
-        user_stats[uname] = {
-            'last_arrival': last_arr,
-            'trip_count': count or 0
-        }
-
-    # 4. & 5. Formatiere Ergebnisliste mit creator an 1. Stelle
-    result = []
-    for u in all_users:
-        stats = user_stats.get(u, {'last_arrival': None, 'trip_count': 0})
-        last_arr_raw = stats['last_arrival']
-        german_date = None
-        if last_arr_raw:
-            try:
-                date_str = str(last_arr_raw).split('T')[0]
-                parts = date_str.split('-')
-                if len(parts) == 3:
-                    german_date = f"{parts[2]}.{parts[1]}.{parts[0]}"
-            except Exception:
-                german_date = None
-
-        result.append({
-            'username': u,
-            'is_self': (u == creator),
-            'last_arrival_date': german_date,
-            'last_arrival_iso': last_arr_raw,
-            'trip_count': stats['trip_count']
-        })
-
-    return result
+        return result
 
 
 # ==========================================
@@ -1049,12 +1326,12 @@ def get_users_sync_overview(conn: sqlite3.Connection, creator: str, is_admin: bo
 # ==========================================
 
 def fetch_statuses_from_user(api_token, username, already_downloaded: pd.DataFrame | None = None,
-                             log_callback=None, progress_callback=None) -> list:
+                             log_callback=None, progress_callback=None,
+                             on_statuses_callback=None) -> list:
     if already_downloaded is None or 'statusId' not in already_downloaded.columns:
         already_ids = set()
     else:
         already_ids = set(already_downloaded['statusId'])
-    global remaining
 
     current_user_data = []
     number = 1
@@ -1066,29 +1343,75 @@ def fetch_statuses_from_user(api_token, username, already_downloaded: pd.DataFra
     
     while url is not None:
         try:
-            travel_response = requests.get(url,
-                                           headers={'accept': 'application/json',
-                                                    'Authorization': f'Bearer {api_token}',
-                                                    'User-Agent': 'TraewellingAnalysis_v10 tee_beutel'})
+            travel_response, api_token = traewelling_api_get(url, api_token, username=username)
             travel_response.raise_for_status()
             travel_json = travel_response.json()
-            travel_data = travel_json.get('data', {})
+            travel_data = travel_json.get('data', [])
+            if isinstance(travel_data, dict):
+                travel_data = [travel_data]
+            elif not isinstance(travel_data, list):
+                travel_data = []
             url = travel_json.get('links', {}).get('next')
 
             current_user_data.extend(travel_data)
-            current_ids = [data.get('id', None) for data in travel_data]
+            current_ids = [data.get('id', None) for data in travel_data if isinstance(data, dict)]
+
+            if on_statuses_callback and travel_data:
+                snippets = []
+                for data in travel_data:
+                    if not isinstance(data, dict):
+                        continue
+                    body = (data.get('body') or '').strip()
+                    if body:
+                        checkin = data.get('checkin') or {}
+                        origin = checkin.get('origin') or {}
+                        destination = checkin.get('destination') or {}
+                        dep_planned = origin.get('departurePlanned')
+                        dep_final = checkin.get('manualDeparture') or origin.get('departureReal') or dep_planned
+                        arr_planned = destination.get('arrivalPlanned')
+                        arr_real = checkin.get('manualArrival') or destination.get('arrivalReal')
+                        arr_final = arr_real or arr_planned
+                        arrival_delay = None
+                        if arr_planned and arr_real:
+                            try:
+                                t_real = datetime.fromisoformat(arr_real.replace('Z', '+00:00'))
+                                t_plan = datetime.fromisoformat(arr_planned.replace('Z', '+00:00'))
+                                arrival_delay = int((t_real - t_plan).total_seconds() / 60)
+                            except Exception:
+                                arrival_delay = None
+                        snippets.append({
+                            'statusId': data.get('id'),
+                            'username': (data.get('user') or {}).get('username') or username,
+                            'body': body,
+                            'lineName': re.sub(r'\s*\(\d+\)', '', (checkin.get('lineName') or '')).strip(),
+                            'category': checkin.get('category') or '',
+                            'routeColor': checkin.get('routeColor') or '',
+                            'origin': origin.get('name') or '',
+                            'destination': destination.get('name') or '',
+                            'distance_km': round((checkin.get('distance') or 0) / 1000.0, 1),
+                            'departure': dep_final or data.get('createdAt') or '',
+                            'arrival': arr_final or '',
+                            'arrivalDelay': arrival_delay,
+                            'likes': data.get('likes') or 0
+                        })
+                if snippets:
+                    try:
+                        on_statuses_callback(snippets)
+                    except Exception as cb_err:
+                        print(f"[WARN] on_statuses_callback Fehler: {cb_err}")
 
             if set(current_ids) & already_ids:
                 url = None
 
-            remaining = travel_response.headers.get('x-ratelimit-remaining')
+            rem_hdr = travel_response.headers.get('x-ratelimit-remaining')
+            set_remaining(rem_hdr)
             rem_val = 60
             try:
-                rem_val = int(remaining)
+                rem_val = int(rem_hdr)
             except Exception:
                 rem_val = 60
 
-            counter_msg = f'   📥 Statusse werden geladen: Seite {number} (Bisher {len(current_user_data)} geladen, Limit: {remaining})'
+            counter_msg = f'   📥 Statusse werden geladen: Seite {number} (Bisher {len(current_user_data)} geladen, Limit: {get_remaining()})'
             print(counter_msg)
             safe_log(log_callback, counter_msg, replace=(number > 1))
 
@@ -1141,23 +1464,20 @@ def fetch_statuses_from_user(api_token, username, already_downloaded: pd.DataFra
 
 
 def fetch_information_from_user(conn: sqlite3.Connection, api_token, username: str, highest_privilege: int = 0) -> str:
-    global remaining
     user_info = {}
     time_of_download_start = datetime.now().isoformat()
     repeat_bool = True
     
     while repeat_bool:
-        user_response = requests.get(f'https://traewelling.de/api/v1/user/{username}',
-                                     headers={'accept': 'application/json',
-                                              'Authorization': f'Bearer {api_token}',
-                                              'User-Agent': 'TraewellingAnalysis_v10 tee_beutel'})
+        user_response, api_token = traewelling_api_get(f'https://traewelling.de/api/v1/user/{username}',
+                                                      api_token, conn=conn, username=username)
         try:
             user_response.raise_for_status()
             user_json = user_response.json()
             user_info = user_json.get('data', {})
             username = user_info.get('username', '')
             repeat_bool = False
-            remaining = user_response.headers.get('x-ratelimit-remaining')
+            set_remaining(user_response.headers.get('x-ratelimit-remaining'))
         except Exception as e:
             if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 429:
                 print('[API] Rate Limit erreicht. Warte 30 Sekunden...')
@@ -1212,7 +1532,7 @@ def get_or_fetch_stop_info(conn: sqlite3.Connection, api_token, stop_id: int, st
     row = cursor.fetchone()
 
     if row is None:
-        global remaining, tf
+        global tf
         if not stop_name:
             stop_name = str(stop_id)
         timezone = 'Europe/Berlin'
@@ -1223,13 +1543,11 @@ def get_or_fetch_stop_info(conn: sqlite3.Connection, api_token, stop_id: int, st
 
         while repeat_bool:
             try:
-                station_response = requests.get(f'https://traewelling.de/api/v1/stations/{stop_id}',
-                                                headers={'accept': 'application/json',
-                                                         'Authorization': f'Bearer {api_token}',
-                                                         'User-Agent': 'TraewellingAnalysis_v10 tee_beutel'})
+                station_response, api_token = traewelling_api_get(f'https://traewelling.de/api/v1/stations/{stop_id}',
+                                                                  api_token, conn=conn)
                 station_response.raise_for_status()
 
-                remaining = station_response.headers.get('x-ratelimit-remaining')
+                set_remaining(station_response.headers.get('x-ratelimit-remaining'))
                 station_json = station_response.json().get('data', {})
                 stop_name = station_json['name']
                 station_ril = station_json.get('rilIdentifier')
@@ -1324,7 +1642,6 @@ def get_or_fetch_stop_info(conn: sqlite3.Connection, api_token, stop_id: int, st
 
 def get_inter_stops_for_journeys(api_token, statuses_dicts: list, log_callback=None,
                                  progress_callback=None, rate_limit_callback=None) -> dict:
-    global remaining
     statuses = [data['checkin']['trip'] for data in statuses_dicts]
     intermediate_data = {}
     current_index = 0
@@ -1342,18 +1659,15 @@ def get_inter_stops_for_journeys(api_token, statuses_dicts: list, log_callback=N
         repeat_bool = True
         while repeat_bool:
             try:
-                intermediate_response = requests.get(url,
-                                                     headers={'accept': 'application/json',
-                                                              'Authorization': f'Bearer {api_token}',
-                                                              'User-Agent': 'TraewellingAnalysis_v10 tee_beutel'})
+                intermediate_response, api_token = traewelling_api_get(url, api_token)
                 intermediate_response.raise_for_status()
-                remaining = intermediate_response.headers.get('x-ratelimit-remaining')
+                set_remaining(intermediate_response.headers.get('x-ratelimit-remaining'))
                 intermediate_data.update(intermediate_response.json().get('data', {}))
 
                 repeat_bool = False
                 current_index += 50
                 noch_zu_laden = max(0, total - current_index)
-                cd_msg = f"   🚉 Zwischenhalte-Countdown: Noch {noch_zu_laden} von {total} Fahrten verbleibend... (Limit: {remaining})"
+                cd_msg = f"   🚉 Zwischenhalte-Countdown: Noch {noch_zu_laden} von {total} Fahrten verbleibend... (Limit: {get_remaining()})"
                 print(cd_msg)
                 safe_log(log_callback, cd_msg, replace=(current_index > 50))
 
@@ -1397,7 +1711,6 @@ def calculate_haversine(lat1, lon1, lat2, lon2) -> int:
 
 def calculate_and_insert(api_token, conn, user_data: list, all_inter_stations: dict,
                          log_callback=None, progress_callback=None) -> None:
-    global remaining
     cursor = conn.cursor()
 
     train_type_to_readable_dict = {
@@ -1701,7 +2014,7 @@ def calculate_and_insert(api_token, conn, user_data: list, all_inter_stations: d
 
 def fetch_data_to_db(username: str, reload_all: bool = False, conn: sqlite3.Connection | None = None,
                      api_token: str | None = None, log_callback=None, update_db: bool = True,
-                     progress_callback=None) -> sqlite3.Connection:
+                     progress_callback=None, on_statuses_callback=None) -> sqlite3.Connection:
     if conn is None:
         conn = init_db()
     if api_token is None:
@@ -1740,7 +2053,7 @@ def fetch_data_to_db(username: str, reload_all: bool = False, conn: sqlite3.Conn
         if progress_callback:
             rem_val = 60
             try:
-                rem_val = int(remaining)
+                rem_val = int(get_remaining())
             except Exception:
                 rem_val = 60
             progress_callback({
@@ -1777,7 +2090,8 @@ def fetch_data_to_db(username: str, reload_all: bool = False, conn: sqlite3.Conn
     report_progress(1, 'Statusse sammeln', 0, 0, f"Hole Statusse für {username}...")
     user_statuses = fetch_statuses_from_user(api_token, username, downloaded_frame,
                                              log_callback=log_callback,
-                                             progress_callback=progress_callback)
+                                             progress_callback=progress_callback,
+                                             on_statuses_callback=on_statuses_callback)
     report_progress(1, 'Statusse sammeln', 1, 1, f"{len(user_statuses)} Statusse gefunden")
 
     if not user_statuses:
@@ -1831,7 +2145,7 @@ def fetch_data_to_db(username: str, reload_all: bool = False, conn: sqlite3.Conn
         def compute_eta(step_idx, current_done, step_active_time, waiting_sleep_sec=0):
             rem_int = 60
             try:
-                rem_int = int(remaining)
+                rem_int = int(get_remaining())
             except Exception:
                 rem_int = 60
 
@@ -1885,7 +2199,7 @@ def fetch_data_to_db(username: str, reload_all: bool = False, conn: sqlite3.Conn
                             eta_based_on_history=(telemetry_samples > 0),
                             eta_sample_count=telemetry_samples)
         else:
-            init_s_msg = f"   🚏 Haltestellen-Countdown: Noch {total_missing_stops} neue Haltestellen zu laden... (Limit: {remaining})"
+            init_s_msg = f"   🚏 Haltestellen-Countdown: Noch {total_missing_stops} neue Haltestellen zu laden... (Limit: {get_remaining()})"
             print(init_s_msg)
             safe_log(log_callback, init_s_msg)
 
@@ -1913,7 +2227,7 @@ def fetch_data_to_db(username: str, reload_all: bool = False, conn: sqlite3.Conn
                                                                     rate_limit_callback=on_stop_rate_limit)
                 stops_downloaded += 1
                 rem = max(0, total_missing_stops - stops_downloaded)
-                s_msg = f"   🚏 Lade Haltestelle: {fetched_name} | Noch {rem} von {total_missing_stops} übrig (Limit: {remaining})"
+                s_msg = f"   🚏 Lade Haltestelle: {fetched_name} | Noch {rem} von {total_missing_stops} übrig (Limit: {get_remaining()})"
                 print(s_msg)
                 safe_log(log_callback, s_msg, replace=(stops_downloaded > 1))
 
@@ -2491,10 +2805,48 @@ def resolve_filtered_status_ids(conn: sqlite3.Connection, usernames: list[str], 
     for flt in extra_filters:
         col = flt.get('col', '')
         val = flt.get('val')
-        if not col:
+        if not col or val is None:
             continue
+        # Aggregat- und Prozent-Spalten ignorieren
+        if any(col.endswith(sfx) for sfx in ('(%)', '(km)', '(min)', '(km/h)')) or col in ('Umweg Faktor', 'Fahrten'):
+            continue
+
         if col.startswith('temporal_'):
-            temporal_filters.append((col.replace('temporal_', ''), str(val)))
+            t_type = col.replace('temporal_', '')
+            t_val = str(val).strip()
+            # Validierung, um fehlerhafte Werte (wie z. B. '4.25' bei month_year) abzufangen
+            if t_type == 'time_of_day' and (':' not in t_val or '-' not in t_val):
+                continue
+            if t_type == 'weekday' and t_val not in ('Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'):
+                continue
+            if t_type == 'month' and not re.match(r'^(0?[1-9]|1[0-2])$', t_val):
+                continue
+            if t_type == 'month_year' and not re.match(r'^\d{4}-(0[1-9]|1[0-2])$', t_val):
+                continue
+            if t_type == 'date' and not re.match(r'^\d{4}-\d{2}-\d{2}$', t_val):
+                continue
+            if t_type == 'year' and not re.match(r'^\d{4}$', t_val):
+                continue
+            temporal_filters.append((t_type, t_val))
+        elif col == 'visibility':
+            v_str = str(val).lower()
+            vis_map = {
+                '0': '0', 'öffentlich': '0',
+                '1': '1', 'nicht gelistet': '1', 'unlisted': '1',
+                '2': '2', 'nur follower': '2', 'follower': '2',
+                '3': '3', 'privat': '3', 'private': '3',
+                '4': '4', 'angemeldete nutzer': '4', 'authenticated': '4',
+                '5': '5', 'enge freunde': '5'
+            }
+            clean_v = ''.join(c for c in v_str if c.isalnum() or c.isspace()).strip()
+            target_code = vis_map.get(clean_v, vis_map.get(str(val).strip(), str(val).strip()))
+            conds.append("CAST(j_flt.visibility AS TEXT) = ?")
+            params.append(target_code)
+        elif col in ('realtimeAvailability', 'realtimeFromDataprovider'):
+            v_str = str(val).lower()
+            b_val = 1 if ('ja' in v_str or '1' in v_str or 'true' in v_str) else 0
+            conds.append(f"j_flt.{col} = ?")
+            params.append(b_val)
         elif col in AVAILABLE_GROUP_COLUMNS:
             sql_expr = AVAILABLE_GROUP_COLUMNS[col]['sql'].replace('j.', 'j_flt.')
             if val is None or str(val) == '' or str(val) == 'None':
@@ -3015,12 +3367,13 @@ def create_user_stops_dataframe_with_inter(conn: sqlite3.Connection, username: s
     return merged_df
 
 def create_user_excel_file(conn: sqlite3.Connection, username: str, start_date: str = '', end_date: str = '',
-                           create_picture: bool = True, custom_settings: dict = None) -> str:
+                           create_picture: bool = True, custom_settings: dict = None,
+                           creator_username: str | None = None) -> str:
     """Erstellt das persönliche Excel-Fahrtenbuch dynamisch anhand der gespeicherten JSON-Konfiguration."""
     kwargs = dict(conn=conn, username=username, start_date=start_date, end_date=end_date)
 
     if custom_settings is None:
-        settings_owner = AUTH_USER if AUTH_USER else username
+        settings_owner = creator_username or get_auth_user() or username
         custom_settings = get_user_excel_settings(conn, settings_owner)
 
     user_sheets = [s for s in custom_settings.get('user_sheets', []) if s.get('enabled', True) is not False]
@@ -3080,8 +3433,7 @@ def create_user_excel_file(conn: sqlite3.Connection, username: str, start_date: 
             df = apply_sheet_metrics(df, stype, sheet_cfg.get('metrics'), num_group_args=num_args)
             all_dataframes.append((df, sname, use_index, freeze_rows))
 
-    output_dir = Path('finished_exports/user')
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = get_export_dir('user', creator_username=creator_username)
     
     date_suffix = get_date_suffix(start_date, end_date)
     file_path = output_dir / f"{username}{date_suffix}_data.xlsx"
@@ -3574,7 +3926,8 @@ def create_temporal_stats_dataframe(df_raw: pd.DataFrame, grouping_type: str, cr
 # ==========================================
 
 def create_ganglinie_plot(username: str, grouping_type: str, conn: sqlite3.Connection = None,
-                          start_date: str = '', end_date: str = '', given_df: pd.DataFrame = None) -> str | None:
+                          start_date: str = '', end_date: str = '', given_df: pd.DataFrame = None,
+                          creator_username: str | None = None) -> str | None:
     if conn is None:
         conn = init_db()
     if given_df is None or given_df.empty:
@@ -3586,8 +3939,7 @@ def create_ganglinie_plot(username: str, grouping_type: str, conn: sqlite3.Conne
     if df.empty:
         return None
 
-    export_dir = Path('finished_exports/gang_linien')
-    export_dir.mkdir(parents=True, exist_ok=True)
+    export_dir = get_export_dir('gang_linien', creator_username=creator_username)
 
     x_col = df.columns[0]
     num_bars = len(df[x_col])
@@ -3617,7 +3969,8 @@ def create_ganglinie_plot(username: str, grouping_type: str, conn: sqlite3.Conne
 
 
 def create_verspaetungs_verteilungen_plot(username: str | list, conn: sqlite3.Connection = None,
-                                          start_date: str = '', end_date: str = '') -> list[str]:
+                                          start_date: str = '', end_date: str = '',
+                                          creator_username: str | None = None) -> list[str]:
     from scipy.stats import norm, poisson, gaussian_kde
     if conn is None:
         conn = init_db()
@@ -3640,8 +3993,7 @@ def create_verspaetungs_verteilungen_plot(username: str | list, conn: sqlite3.Co
         kde = gaussian_kde(delays)
         kde.set_bandwidth(bw_method=0.1)
 
-        export_dir = Path('finished_exports/verspaetungs_plots')
-        export_dir.mkdir(parents=True, exist_ok=True)
+        export_dir = get_export_dir('verspaetungs_plots', creator_username=creator_username)
 
         fig, ax = plt.subplots(figsize=(10, 6))
         xlim_min = max(delays.min() - 2, -10)
@@ -3681,7 +4033,6 @@ def create_verspaetungs_verteilungen_plot(username: str | list, conn: sqlite3.Co
 
 
 def fetch_polylines(conn: sqlite3.Connection, api_token: str, status_ids: list, log_callback=None) -> dict:
-    global remaining
     polyline_data = {}
     current_index = 0
     total = len(status_ids)
@@ -3701,7 +4052,7 @@ def fetch_polylines(conn: sqlite3.Connection, api_token: str, status_ids: list, 
                     'User-Agent': 'TraewellingAnalysis_v10 tee_beutel'
                 })
                 response.raise_for_status()
-                remaining = response.headers.get('x-ratelimit-remaining')
+                set_remaining(response.headers.get('x-ratelimit-remaining'))
 
                 features = response.json().get('data', {}).get('features', [])
 
@@ -3724,7 +4075,7 @@ def fetch_polylines(conn: sqlite3.Connection, api_token: str, status_ids: list, 
                 repeat_bool = False
                 current_index += 50
                 rem_lines = max(0, total - current_index)
-                cd_msg = f'   🗺️ Polylines-Countdown: Noch {rem_lines} von {total} Linien verbleibend... (Limit: {remaining})'
+                cd_msg = f'   🗺️ Polylines-Countdown: Noch {rem_lines} von {total} Linien verbleibend... (Limit: {get_remaining()})'
                 print(cd_msg)
                 safe_log(log_callback, cd_msg, replace=(current_index > 50))
             except Exception as e:
@@ -3746,7 +4097,8 @@ def fetch_polylines(conn: sqlite3.Connection, api_token: str, status_ids: list, 
     return polyline_data
 
 def create_stops_map(conn: sqlite3.Connection, usernames: bool | str | list = True, start_date: str = '',
-                     end_date: str = '', log_callback=None, lite_version: bool = False) -> str | None:
+                     end_date: str = '', log_callback=None, lite_version: bool = False,
+                     creator_username: str | None = None) -> str | None:
     if usernames is True:
         usernames = pd.read_sql('SELECT username FROM users', conn)['username'].tolist()
     elif isinstance(usernames, str):
@@ -3825,8 +4177,7 @@ def create_stops_map(conn: sqlite3.Connection, usernames: bool | str | list = Tr
     if not stops_with_visits:
         return None
 
-    export_dir = Path('finished_exports/polylines')
-    export_dir.mkdir(parents=True, exist_ok=True)
+    export_dir = get_export_dir('polylines', creator_username=creator_username)
 
     names_joined = "_".join(sorted(usernames)[:6])
     if len(usernames) > 6:
@@ -4408,7 +4759,8 @@ def create_stops_map(conn: sqlite3.Connection, usernames: bool | str | list = Tr
 
 
 def create_polyline(conn: sqlite3.Connection, api_token: str, usernames: bool | str | list = True, start_date: str = '',
-                    end_date: str = '', log_callback=None, lite_version: bool = False) -> str | None:
+                    end_date: str = '', log_callback=None, lite_version: bool = False,
+                    creator_username: str | None = None) -> str | None:
     if usernames is True:
         usernames = pd.read_sql('SELECT username FROM users', conn)['username'].tolist()
     elif isinstance(usernames, str):
@@ -4658,8 +5010,7 @@ def create_polyline(conn: sqlite3.Connection, api_token: str, usernames: bool | 
 
     if export_features:
         feature_collection = {"type": "FeatureCollection", "features": export_features}
-        export_dir = Path('finished_exports/polylines')
-        export_dir.mkdir(parents=True, exist_ok=True)
+        export_dir = get_export_dir('polylines', creator_username=creator_username)
 
         names_joined = "_".join(sorted(usernames)[:6])
         if len(usernames) > 6:
@@ -5070,7 +5421,7 @@ def get_trip_color(trip_id, shared_trips):
 
 
 def create_timeline(conn: sqlite3.Connection, usernames: list[str], start_date: str = '', end_date: str = '',
-                    log_callback=None) -> str | None:
+                    log_callback=None, creator_username: str | None = None) -> str | None:
     if isinstance(usernames, str):
         usernames = [usernames]
     elif usernames is True:
@@ -5229,8 +5580,7 @@ def create_timeline(conn: sqlite3.Connection, usernames: list[str], start_date: 
     w_start_iso = window_start.strftime('%Y-%m-%dT%H:%M:%S')
     w_end_iso = window_end.strftime('%Y-%m-%dT%H:%M:%S')
 
-    export_dir = Path('finished_exports/timelines')
-    export_dir.mkdir(parents=True, exist_ok=True)
+    export_dir = get_export_dir('timelines', creator_username=creator_username)
 
     names_joined = "_".join(sorted(usernames)[:6])
     if len(usernames) > 6:
@@ -5837,22 +6187,21 @@ def create_shared_grouped_dataframe(conn: sqlite3.Connection, usernames: list[st
 
 def create_shared_excel_file(conn: sqlite3.Connection, usernames: list[str] = None, start_date: str = '',
                              end_date: str = '', columns_to_compare: list[str] = None,
-                             custom_settings: dict = None) -> str | None:
+                             custom_settings: dict = None, creator_username: str | None = None) -> str | None:
     if usernames is None:
         usernames = pd.read_sql('SELECT username FROM users', conn)['username'].tolist()
     if not usernames:
         return None
 
     if custom_settings is None:
-        settings_owner = AUTH_USER if AUTH_USER else usernames[0]
+        settings_owner = creator_username or get_auth_user() or (usernames[0] if usernames else "")
         custom_settings = get_user_excel_settings(conn, settings_owner)
 
     shared_sheets = [s for s in custom_settings.get('shared_sheets', []) if s.get('enabled', True) is not False]
     if not shared_sheets:
         shared_sheets = get_default_excel_settings()['shared_sheets']
 
-    output_dir = Path('finished_exports/shared')
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = get_export_dir('shared', creator_username=creator_username)
     names_joined = "_".join(sorted(usernames)[:6])
     if len(usernames) > 6:
         names_joined += f"_and_{len(usernames) - 6}_more"
@@ -5975,10 +6324,12 @@ def fetch_and_analyse(usernames: list | str | None = None, include_stored_users:
 
 def call_gemini(client, contents: str, json_mode: bool = False, system_instruction: str = None) -> str | dict:
     models_to_try = [
-        os.getenv('GEMINI_MODEL', 'gemini-2.5-flash'),
-        'gemini-3.1-flash-lite',
-        'gemini-3.5-flash-lite',
-        'gemini-3.5-flash'
+        os.getenv('GEMINI_MODEL', 'gemini-3.8-flash'),
+        'gemini-3.7-flash',
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
+        'gemini-2.5-flash',
+        'gemini-3.5-flash-lite'
     ]
     models_to_try = list(dict.fromkeys(models_to_try))
 
@@ -6328,11 +6679,45 @@ def run_dataframe_analysis(func_name: str, username: str, start_date: str = '', 
             local_conn.close()
 
 
+def wrap_query_with_journeys_cte(sql_query: str, mandatory_j_where: str) -> str:
+    """
+    Schaltet automatisch eine CTE für `journeys` mit der Pflicht-Filterung vor das SQL-Statement.
+    Verwendet main.journeys, um zirkuläre Referenzen im CTE zu vermeiden.
+    Kombiniert sauber mit bestehenden WITH / WITH RECURSIVE Klauseln.
+    """
+    clean = sql_query.strip().rstrip(';')
+    if not clean:
+        return clean
+
+    cte_body = f"journeys AS (SELECT * FROM main.journeys AS j WHERE {mandatory_j_where})"
+
+    # Prüfe auf führende Kommentare und WITH RECURSIVE
+    match_rec = re.match(r"^(\s*(?:--[^\n]*\n\s*)*)WITH\s+RECURSIVE\s+", clean, re.IGNORECASE)
+    if match_rec:
+        prefix = match_rec.group(1)
+        rest = clean[match_rec.end():]
+        return f"{prefix}WITH RECURSIVE {cte_body},\n{rest}"
+
+    # Prüfe auf führende Kommentare und einfaches WITH
+    match_with = re.match(r"^(\s*(?:--[^\n]*\n\s*)*)WITH\s+", clean, re.IGNORECASE)
+    if match_with:
+        prefix = match_with.group(1)
+        rest = clean[match_with.end():]
+        return f"{prefix}WITH {cte_body},\n{rest}"
+
+    return f"WITH {cte_body}\n{clean}"
+
+
 def _process_ai_chat_turn_impl(conn: sqlite3.Connection, creator: str, chat_id: str, user_message: str,
                               selected_users: list[str], start_date: str = '', end_date: str = '',
                               is_admin: bool = False) -> dict:
-    global AUTH_USER, FOLLOWED_USERS, TRUSTED_USERS, FOLLOWERS_USERS
+    with user_auth_context_from_db(conn, creator):
+        return _process_ai_chat_turn_worker(conn, creator, chat_id, user_message, selected_users, start_date, end_date, is_admin)
 
+
+def _process_ai_chat_turn_worker(conn: sqlite3.Connection, creator: str, chat_id: str, user_message: str,
+                                selected_users: list[str], start_date: str = '', end_date: str = '',
+                                is_admin: bool = False) -> dict:
     # 0. Key-Auswahl & Rate-Limit
     cursor = conn.cursor()
     cursor.execute("SELECT gemini_api_key FROM user_login_data WHERE owner = ?", (creator,))
@@ -6356,28 +6741,23 @@ def _process_ai_chat_turn_impl(conn: sqlite3.Connection, creator: str, chat_id: 
     if not user_byok:
         check_and_update_rate_limit(conn, creator, is_admin=is_admin, limit_per_hour=10)
 
-    # 1. Sichtbarkeits- & Kontext-Setup
-    AUTH_USER = creator
-    cursor.execute("SELECT followed_users, trusted_users, followers FROM user_login_data WHERE owner = ?", (creator,))
-    row = cursor.fetchone()
-    if row:
-        FOLLOWED_USERS = set(json.loads(row[0])) if row[0] else set()
-        TRUSTED_USERS = set(json.loads(row[1])) if row[1] else set()
-        FOLLOWERS_USERS = set(json.loads(row[2])) if row[2] else set()
-    else:
-        FOLLOWED_USERS = set()
-        TRUSTED_USERS = set()
-        FOLLOWERS_USERS = set()
-
-    vis_sql = get_shared_visibility_query("j")
+    # 1. Sichtbarkeits- & Kontext-Setup (wird durch user_auth_context_from_db bereitgestellt)
 
     if selected_users:
         cleaned_users = [re.sub(r"[^a-zA-Z0-9_\-\.]", "", str(u)) for u in selected_users if str(u).strip()]
         user_filter = f"j.username IN ({','.join(f"'{u}'" for u in cleaned_users)})" if cleaned_users else f"j.username = '{creator}'"
         default_target_user = cleaned_users[0] if cleaned_users else creator
     else:
+        cleaned_users = [creator]
         user_filter = f"j.username = '{creator}'"
         default_target_user = creator
+
+    # 2. Query-Verschlankung bei Selbstabfragen: Wenn ausschließlich der eingeloggte User
+    # abgefragt wird, darf er alle eigenen Fahrten sehen -> vis_sql entfällt vollständig.
+    if cleaned_users == [creator] or not cleaned_users:
+        vis_sql = ""
+    else:
+        vis_sql = get_shared_visibility_query("j")
 
     date_conds = []
     if start_date:
@@ -6411,7 +6791,7 @@ def _process_ai_chat_turn_impl(conn: sqlite3.Connection, creator: str, chat_id: 
             history_lines.append(line)
     history_text = "\n\n".join(history_lines) if history_lines else "(Bisher keine Nachrichten in diesem Chat)"
 
-    client = genai.Client(api_key=active_key)
+    client = genai.Client(api_key=active_key, http_options={'timeout': 20000})
 
     # 3. Schritt 1 – SQL-Generierung (Gemini)
     schema_prompt = f"""Du bist der KI-Agent "Antigravity" – ein hochpräziser SQLite-Datenbankexperte für Träwelling-Fahrtauswertungen.
@@ -6464,8 +6844,7 @@ Tabelle stops (Alias s, o für origin, d für destination):
   city TEXT (Stadtname ohne Flagge, z. B. 'Braunschweig', 'Frankfurt')
 
 WICHTIGE REGELN & BEST PRACTICES:
-1. ZWINGENDE SICHERHEITS-BEDINGUNG: JEDE Abfrage auf journeys j MUSS im WHERE-Block folgende Pflicht-Filterklausel (Sichtbarkeit, User, Datumsbereich) zwingend enthalten:
-   {mandatory_j_where}
+1. SICHERHEIT & SCOPE: Das Backend filtert die Tabelle `journeys` automatisch auf die berechtigten User und den gewählten Zeitraum. Du musst KEINE User- oder Datums-Filterlisten in deine WHERE-Klauseln einbauen, es sei denn, der Nutzer schränkt in seiner Frage explizit ein (z. B. nach einer bestimmten Linie, Stadt oder Kategorie). Schreibe einfach ganz normale SELECT-Abfragen auf `journeys`.
 2. UMGANG MIT LÄNDERN & REGIONEN:
    - Da `countryName`, `admin1State` und `admin2Dist` in der DB ein Flaggen-Emoji enthalten (z. B. 'Deutschland 🇩🇪'), nutze für exakte Vergleiche idealerweise den ISO-Code `countryCode` (z. B. `o.countryCode = 'DE'` oder `o.countryCode != 'DE'`) ODER arbeite mit `LIKE 'Deutschland%'` bzw. `NOT LIKE 'Deutschland%'`.
    - Verwende bei Ländern oder Bundesländern NIEMALS einfache Vergleiche wie `o.countryName = 'Deutschland'` oder `originCountry = 'Deutschland'`.
@@ -6475,22 +6854,22 @@ WICHTIGE REGELN & BEST PRACTICES:
      SELECT * FROM (
          SELECT 'Ausreise' AS typ, j.departureFinal AS zeitpunkt, o.stopName AS start, d.stopName AS ziel
          FROM journeys j JOIN stops o ON j.originId = o.id JOIN stops d ON j.destinationId = d.id
-         WHERE {mandatory_j_where} AND o.countryCode = 'DE' AND d.countryCode != 'DE'
+         WHERE o.countryCode = 'DE' AND d.countryCode != 'DE'
          ORDER BY j.departureFinal DESC LIMIT 1
      )
      UNION ALL
      SELECT * FROM (
          SELECT 'Einreise' AS typ, j.arrivalFinal AS zeitpunkt, o.stopName AS start, d.stopName AS ziel
          FROM journeys j JOIN stops o ON j.originId = o.id JOIN stops d ON j.destinationId = d.id
-         WHERE {mandatory_j_where} AND o.countryCode != 'DE' AND d.countryCode = 'DE'
+         WHERE o.countryCode != 'DE' AND d.countryCode = 'DE'
          ORDER BY j.arrivalFinal ASC LIMIT 1
      );
 4. HALTESTELLEN & ORTE:
    - Haltestellenbesuche (entweder als Start ODER Ziel) zählst du immer über eine CTE mit `UNION ALL`:
      WITH stop_visits AS (
-         SELECT j.originId AS stopId, j.statusId, j.username, j.distance FROM journeys j WHERE {mandatory_j_where}
+         SELECT j.originId AS stopId, j.statusId, j.username, j.distance FROM journeys j
          UNION ALL
-         SELECT j.destinationId AS stopId, j.statusId, j.username, j.distance FROM journeys j WHERE {mandatory_j_where}
+         SELECT j.destinationId AS stopId, j.statusId, j.username, j.distance FROM journeys j
      )
      SELECT s.stopName, s.city, COUNT(*) AS besuche, ROUND(SUM(sv.distance)/1000.0, 1) AS km
      FROM stop_visits sv JOIN stops s ON sv.stopId = s.id
@@ -6534,7 +6913,7 @@ WICHTIGE REGELN & BEST PRACTICES:
      2. `create_user_extended_stats` (Aktionsradius in km, Haupthaltestelle/Hub, Extrempunkte Nord/Süd/Ost/West, Sigma/RMSE)
      3. `create_temporal_stats_dataframe` mit `grouping_type='time_of_day'` oder `'weekday'` (Reisegewohnheiten nach Tageszeit/Wochentag – Frühaufsteher, Pendler, Nachtfahrer)
      4. `create_user_stops_dataframe_with_inter` (Meistbesuchte Haltestellen inkl. Via-Durchfahrten und Umsteigequote)
-     5. Ergänzende `sql`-Abfragen auf `journeys j` (mit Pflicht-WHERE `{mandatory_j_where}`) für: Top-Verkehrsmittel (`category`), Top-Betreiber (`operatorName`), Lieblings-Linien (`lineName`) & Baureihen (`locomotiveClass`), Fahrtgründe (`business`), besuchte Länder (`o.countryName`, `d.countryName`) sowie ggf. häufige Tags (`ticket`, `travelClass`, `role`) oder markante Statustexte (`body`).
+     5. Ergänzende `sql`-Abfragen auf `journeys j` für: Top-Verkehrsmittel (`category`), Top-Betreiber (`operatorName`), Lieblings-Linien (`lineName`) & Baureihen (`locomotiveClass`), Fahrtgründe (`business`), besuchte Länder (`o.countryName`, `d.countryName`) sowie ggf. häufige Tags (`ticket`, `travelClass`, `role`) oder markante Statustexte (`body`).
    - Bei einfachen, gezielten Einzelfragen (z. B. "Wie viele Kilometer bin ich gefahren?") genügt 1 gezielte Action in `actions`.
    - Bei reinen Begrüßungen oder Fragen ohne Datenbezug: Setze `"actions": []`, `"requires_followup": false`, `"direct_answer": "Hallo! ..."`
 
@@ -6546,7 +6925,46 @@ WICHTIGE REGELN & BEST PRACTICES:
    - Wenn der Nutzer nach Begriffen im Statustext sucht (z. B. "Kaffee", "zuhause", bestimmte Getränke, Orte oder Aktivitäten), verwende in SQL immer eine flexible, case-insensitive Suche mit Wildcards: `LOWER(j.body) LIKE '%begriff%'`.
    - Bei Begriffen mit unterschiedlichen Schreibweisen oder Varianten (z. B. "zuhause" vs. "zu Hause" vs. "nach hause"), baue IMMER eine kombinierte OR-Klausel auf (`LOWER(j.body) LIKE '%zuhause%' OR LOWER(j.body) LIKE '%zu hause%' OR LOWER(j.body) LIKE '%nach hause%'`).
 
-10. ANTWORTRÜCKGABE (JSON-FORMAT):
+13. STRIKTES VERBOT VON EXAKTEN HALTESTELLEN-NAMEN OHNE VORHERIGEN LOOKUP (NAMENSAUFLÖSUNG & RELATIONEN):
+   - WICHTIGSTE DB-EIGENSCHAFT: Haltestellen in `stops.stopName` enthalten in der Datenbank fast immer den Stadtnamen als Präfix (z. B. 'Braunschweig, Pockelsstraße', 'Braunschweig, Rathaus', 'Braunschweig, Mühlenpfortstraße') oder ein angehängtes RIL100-Kürzel (z. B. 'Braunschweig Hbf (HBS)', 'Frankfurt(Main)Hbf (FF)').
+   - STRIKTES VERBOT FÜR RUNDE 1: Verwende in Runde 1 NIEMALS `stopName = '...'` oder `stopName IN ('Name1', 'Name2', ...)` mit vom Nutzer genannten Namen! Das führt wegen fehlender Städtenamen oder RIL100-Kürzel zu 0 Treffern!
+   - GOLDENE REGEL FÜR VERBINDUNGS- UND RICHTUNGSFRAGEN ("Welche Haltestellen nutze ich VON X und welche ZU X?"):
+     1. Verwende bei Fragen nach beiden Richtungen (ab X vs. nach X) NIEMALS eine einzige kombinierte `OR`-Abfrage über `o.stopName` und `d.stopName`, sondern lege ZWINGEND ZWEI GETRENNTE SQL-Actions in `"actions"` an!
+     2. Gruppiere dabei jeweils NUR nach der Gegenhaltestelle, damit verschiedene Schreibweisen der Referenzhaltestelle X (wie 'Braunschweig Michelfelderplatz' und 'Michelfelderplatz, Braunschweig') automatisch zusammengezählt werden:
+        - Action 1 (Fahrten AB X):
+          SELECT d.stopName AS ziel_halt, COUNT(*) AS fahrten
+          FROM journeys j
+          JOIN stops o ON j.originId = o.id
+          JOIN stops d ON j.destinationId = d.id
+          WHERE LOWER(o.stopName) LIKE '%michelfelder%'
+          GROUP BY d.stopName
+          ORDER BY fahrten DESC;
+        - Action 2 (Fahrten NACH X):
+          SELECT o.stopName AS start_halt, COUNT(*) AS fahrten
+          FROM journeys j
+          JOIN stops o ON j.originId = o.id
+          JOIN stops d ON j.destinationId = d.id
+          WHERE LOWER(d.stopName) LIKE '%michelfelder%'
+          GROUP BY o.stopName
+          ORDER BY fahrten DESC;
+     3. Halte `LIKE`-Bedingungen so einfach wie möglich: Nutze den markanten Wortstamm (z. B. `LOWER(o.stopName) LIKE '%michelfelder%'` oder `LOWER(s.stopName) LIKE '%mühlenpfor%'`), statt fehleranfällige, mehrfach verschachtelte `REPLACE`-Ketten zu bauen.
+   - ZWISCHENHALTE (`interStops`) MITPRÜFEN:
+     Wenn der Nutzer nach Haltestellen auf einer Strecke fragt oder bestimmte genannte Haltestellen nicht als Start/Ziel (`originId`/`destinationId`) auftauchen, prüfe zusätzlich (oder über `"requires_followup": true`), ob diese Haltestellen als Zwischenhalt in `j.interStops` durchfahren wurden:
+     SELECT o.stopName AS start_halt, d.stopName AS ziel_halt, j.lineName, j.interStops, COUNT(*) AS fahrten
+     FROM journeys j
+     JOIN stops o ON j.originId = o.id
+     JOIN stops d ON j.destinationId = d.id
+     WHERE (
+         LOWER(o.stopName) LIKE '%michelfelder%'
+         OR LOWER(d.stopName) LIKE '%michelfelder%'
+       )
+     GROUP BY o.stopName, d.stopName, j.lineName, j.interStops;
+   - ALLGEMEINER KANDIDATEN-LOOKUP (wenn nach mehreren losen Haltestellen oder Betreibern gefragt wird):
+     Nutze `"requires_followup": true` und suche in Runde 1 IMMER mit `OR`-verknüpften `LIKE '%wortstamm%'`-Bedingungen (z. B. `LOWER(s.stopName) LIKE '%pockel%' OR LOWER(s.stopName) LIKE '%mühlenpfort%' OR LOWER(s.stopName) LIKE '%rathaus%'`), niemals mit `IN (...)`. Erst in Runde 2 darfst du die in Runde 1 gefundenen exakten `stopName`-Werte aus der Datenbank für `=` oder `IN (...)` verwenden.
+   - RÜCKFRAGE BEI UNSICHERHEIT:
+     Wenn der Lookup mehrere mehrdeutige Haltestellen/Betreiber liefert (z. B. 'Rathaus' in verschiedenen Städten) und aus dem Kontext nicht eindeutig hervorgeht, welche gemeint ist, gib in Runde 2 `"actions": []` zurück und frage beim Nutzer mit den gefundenen DB-Namen nach.
+
+14. ANTWORTRÜCKGABE (JSON-FORMAT):
 Gib deine Antwort IMMER als valides JSON-Objekt zurück:
 {{
   "is_teapot": false,
@@ -6566,7 +6984,7 @@ Gib deine Antwort IMMER als valides JSON-Objekt zurück:
     {{
       "type": "sql",
       "label": "Top Verkehrsmittel",
-      "sql": "SELECT j.category, COUNT(*) AS fahrten, ROUND(SUM(j.distance)/1000.0, 1) AS km FROM journeys j WHERE {mandatory_j_where} GROUP BY j.category ORDER BY fahrten DESC"
+      "sql": "SELECT j.category, COUNT(*) AS fahrten, ROUND(SUM(j.distance)/1000.0, 1) AS km FROM journeys j GROUP BY j.category ORDER BY fahrten DESC"
     }}
   ],
   "requires_followup": false,
@@ -6707,6 +7125,29 @@ AKTUELLE NUTZERFRAGE:
                 flags=re.IGNORECASE
             )
 
+            # Sicherheitsnetz: Wandelt exakte stopName IN ('A', 'B') Abfragen ohne Wildcards
+            # automatisch in tolerante LIKE-Abfragen um (wichtig wegen Ortspräfixen & RIL100-Codes)
+            def _replace_stopname_in(match):
+                col_expr = match.group(1)
+                inner_items = re.findall(r"'([^']+)'", match.group(2))
+                if not inner_items:
+                    return match.group(0)
+                # Nur umwandeln, wenn keine RIL100-Klammern und keine Kommas (wie 'Stadt, Halt') enthalten sind
+                if all(',' not in item and '(' not in item for item in inner_items):
+                    like_parts = [
+                        f"LOWER(REPLACE(REPLACE({col_expr}, ' ', ''), '-', '')) LIKE '%{re.sub(r'[\s\-]+', '', item.lower())}%'"
+                        for item in inner_items
+                    ]
+                    return "(" + " OR ".join(like_parts) + ")"
+                return match.group(0)
+
+            clean_sql = re.sub(
+                r"\b((?:[a-zA-Z0-9_]+\.)?stopName)\s+IN\s*\(([^)]+)\)",
+                _replace_stopname_in,
+                clean_sql,
+                flags=re.IGNORECASE
+            )
+
             # Sicherheitsprüfung: nur SELECT oder WITH
             if not re.match(r"^(SELECT|WITH)\b", clean_sql, re.IGNORECASE) or re.search(forbidden_pattern, clean_sql, re.IGNORECASE):
                 return {
@@ -6722,11 +7163,14 @@ AKTUELLE NUTZERFRAGE:
                     "success": False
                 }
 
+            # Backend-Wrapping: Automatische CTE für journeys vorschalten
+            wrapped_sql = wrap_query_with_journeys_cte(clean_sql, mandatory_j_where)
+
             ro_conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
             df = None
             sql_error = None
             try:
-                df = pd.read_sql_query(clean_sql, ro_conn)
+                df = pd.read_sql_query(wrapped_sql, ro_conn)
             except Exception as sql_err:
                 sql_error = sql_err
                 fix_prompt = f"""Die folgende SQLite-Query hat einen Fehler geworfen:
@@ -6736,7 +7180,7 @@ Query:
 Fehler:
 {sql_err}
 
-Pflicht-Filterklausel: {mandatory_j_where}
+Hinweis: Die Tabelle `journeys` wird vom Backend automatisch auf die berechtigten Daten gefiltert. Du musst keine Pflicht-WHERE-Bedingungen für User/Datumsbereiche einbauen.
 
 Bitte korrigiere die SQL-Abfrage für SQLite. Gib wieder nur das JSON zurück:
 {{"needs_sql": true, "sql": "KORRIGIERTES SELECT ...", "direct_answer": ""}}
@@ -6756,9 +7200,16 @@ Bitte korrigiere die SQL-Abfrage für SQLite. Gib wieder nur das JSON zurück:
                         retry_sql,
                         flags=re.IGNORECASE
                     )
+                    retry_sql = re.sub(
+                        r"\b((?:[a-zA-Z0-9_]+\.)?stopName)\s+IN\s*\(([^)]+)\)",
+                        _replace_stopname_in,
+                        retry_sql,
+                        flags=re.IGNORECASE
+                    )
                     if retry_sql and re.match(r"^(SELECT|WITH)\b", retry_sql, re.IGNORECASE) and not re.search(forbidden_pattern, retry_sql, re.IGNORECASE):
                         clean_sql = retry_sql
-                        df = pd.read_sql_query(clean_sql, ro_conn)
+                        retry_wrapped_sql = wrap_query_with_journeys_cte(clean_sql, mandatory_j_where)
+                        df = pd.read_sql_query(retry_wrapped_sql, ro_conn)
                         sql_error = None
                 except Exception as retry_err:
                     sql_error = retry_err
@@ -6837,6 +7288,10 @@ Bitte korrigiere die SQL-Abfrage für SQLite. Gib wieder nur das JSON zurück:
 URSPRÜNGLICHE NUTZERFRAGE:
 {user_message}
 
+WICHTIGE REGELN FÜR FOLGEABFRAGEN:
+- Das Backend filtert die Tabelle `journeys` automatisch auf die berechtigten User und den gewählten Zeitraum. Du musst keine Pflicht-WHERE-Bedingungen für User/Datumsbereiche einbauen, sondern schreibst ganz normale SELECT-Abfragen auf `journeys`.
+- Wenn Runde 1 eine Namenssuche (Haltestellen, Betreiber etc.) war und mehrere mehrdeutige Kandidaten gefunden wurden, bei denen unklar ist, welchen der Nutzer meint: Gib `"actions": []` zurück, damit im nächsten Schritt gezielt beim Nutzer nachgefragt wird.
+
 Welche gezielten Folgeabfragen (maximal 4 weitere Actions) sind basierend auf diesen Daten noch notwendig, um die Nutzerfrage vollständig zu beantworten?
 Falls bereits alle Daten vorliegen, gib eine leere actions-Liste zurück (`"actions": []`).
 
@@ -6881,6 +7336,14 @@ AKTUELLE FRAGE:
 
 ERGEBNISSE DER AUSGEFÜHRTEN TEILABFRAGEN UND ANALYSEN ({len(executed_steps)} Schritte):
 {combined_steps_summary}
+
+WICHTIGE REGELN FÜR DIE ZUSAMMENFASSUNG VON HALTESTELLEN & RICHTUNGEN:
+- In der Datenbank existieren für dieselbe physische Haltestelle oft unterschiedliche Schreibweisen (z. B. 'Braunschweig Mittelweg', 'Braunschweig, Mittelweg', 'Mittelweg, Braunschweig', 'BS, ...' oder 'Braunschweig Hbf', 'Braunschweig Hbf (HBS)', 'Hauptbahnhof, Braunschweig' oder Tippfehler-Varianten wie 'Mühlenpfordtstraße' vs. 'Mühlenpfortstraße').
+- Addiere für jede Richtung ALLE Schreibweisen derselben physischen Haltestelle zu einer Gesamtsumme zusammen (z. B. 76 + 1 = 77 Fahrten) und weise in einer kurzen Fußnote transparent darauf hin, aus welchen DB-Schreibweisen sich die Summe zusammensetzt.
+- Verwechsle NIEMALS eine andere Schreibweise derselben Haltestelle (wie 'Michelfelderplatz, Braunschweig' statt 'Braunschweig Michelfelderplatz') mit der Gegenrichtung! Maßgeblich für die Richtung ist ausschließlich, ob die Haltestelle als Start (`origin` / `start_halt`) oder als Ziel (`destination` / `ziel_halt`) abgefragt wurde.
+
+WICHTIGER HINWEIS ZU ERGEBNISSEN:
+- WICHTIG: Wenn eine SQL-Abfrage 'Keine Datensätze gefunden (0 Treffer).' zurückgibt, bedeutet das, dass die Abfrage syntaktisch und technisch FEHLERFREI ausgeführt wurde, aber schlicht keine passenden Fahrten in der Datenbank existieren. Erfinde NIEMALS einen Syntax- oder Datenbankfehler, sondern teile dem Nutzer freundlich mit, dass für diese Kriterien keine Fahrten gefunden wurden.
 
 Formuliere eine fundierte, hervorragend strukturierte deutsche Antwort. Führe alle Datenquellen und statistischen Kennzahlen sinnvoll zusammen und interpretiere sie im Gesamtzusammenhang (z. B. Mobilitätsmuster, Reisezeiten, Geschwindigkeiten, Lieblingsstrecken, Verkehrsmittelwahl, Verspätungsstatistiken)."""
 
@@ -7016,5 +7479,5 @@ if __name__ == '__main__':
     fetch_and_analyse(include_stored_users=True, start_date='2026-08-01', end_date='2026-08-31', usernames='zug_pegnitzpfeil_freak')
 
     print("\n" + "="*50)
-    print(f'🏁 FERTIG! Requests übrig: {remaining} | Gesamtdauer: {time() - start:.2f} Sekunden')
+    print(f'🏁 FERTIG! Requests übrig: {get_remaining()} | Gesamtdauer: {time() - start:.2f} Sekunden')
     print("="*50)

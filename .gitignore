@@ -27,3 +27,6 @@ venv/
 env/
 .idea/
 .vscode/
+bench_*.py
+test_regression.py
+baseline_snapshot.json
